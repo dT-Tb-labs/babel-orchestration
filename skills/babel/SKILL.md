@@ -21,6 +21,37 @@ superpowers の**拡張レイヤー**である。superpowers:brainstorming / sup
 
 編成数(2/3/5体)=独立検収系統+専任役割の数。Sonnet機械的委譲（Phase 2実装・Phase 3一次スクリーニング含む）は全規模で可（コスト規律の委譲基準に従う）。リード=Opus選択時はFable枠をOpusが兼務し、Claude内検証はSonnet＋Opus別視点で構成する — L編成は実質4モデル＋役割分担になる旨をユーザーに明示する。
 
+## 依存と最小構成
+
+babelの必須依存は **Claude Code 本体のみ**（リード＋Agent/Workflowツール）。他は全て任意で、無ければ縮退する。導入・自己検査は repo 同梱の `install.sh`（`sh install.sh` でコピー＋各チャネル self-test、任意チャネル欠如は warn 継続）。
+
+| 依存 | 区分 | 無い場合の縮退 |
+|---|---|---|
+| Claude Code（リード＋Agent/Workflowツール） | **必須** | 縮退不可（babel自体が動かない） |
+| superpowers スキル群（brainstorming/writing-plans/executing-plans/subagent-driven-development） | 推奨 | 下記「superpowers非在時」参照。babelのフェーズ骨格は維持し、各superpowersスキルを素の等価手順に置換する |
+| cdx-sol（SOL チャネル） | 任意 | SOL系統を外す。縮退表参照 |
+| agy（agy チャネル） | 任意 | agy系統を外す。縮退表参照 |
+
+### 1チャネル最小構成モード（Claude only）
+
+**SOL も agy も無い環境でも babel は第一級で動く。** この場合、独立性は「異モデル間」から「同一Claude内の異視点＋敵対的検証」に縮退する。明示すべきは「独立性低下（外部モデル非在）」の1点のみで、多モデル編成の骨格（設計ディベート／検収ゲート／build-debug）はそのまま維持する。
+
+規模別の縮退:
+- **S**: リード単独設計＋実装。検収 = Claude敵対的レビュー1体（acceptance-gate (a) の1体版、patterns.md 参照）。SOL quick の代替。
+- **M**: 設計ディベート = リード自案＋Claude内視点別（risk-first / user-first）を Workflow `parallel()` で Sonnet 生成し統合（外部2案の代替）。検収 = Claude敵対的Workflow（次元別並列→Opus敵対的検証）1ラウンド。
+- **L**: フル acceptance-gate を Claude内多視点だけで回す。検収3系統 = ①correctness/security/edge/spec の次元別 Sonnet ②Opus敵対的検証 ③completeness critic。ラウンドループ・収束判定は通常通り。
+
+要点: **acceptance-gate の (a) Claude敵対的Workflow は元から外部非依存**（patterns.md §acceptance-gate (a)）。最小構成はこの (a) を検収の主軸に据え、(b)agy・(c)SOL を落とすだけ。同ラウンド内ブラインド・指紋dedup・変更影響ルーティング等の規律は全て有効なまま。「judge verdict もデータ」原則（外部同様、Claude内検証結果も接地で棄却可）も維持する。
+
+### superpowers 非在時の縮退
+
+superpowers スキルが導入されていない環境では、babelは各フェーズを素の等価手順に置換して続行する（フェーズ骨格・多モデル注入は不変）:
+- brainstorming → リードがユーザーに要件質疑（設計を変える質問を優先）を直接行う。
+- writing-plans → リードが plan文書（goal / criteria / phases / risks）を `.babel/<task>/spec.md` 近傍に直接記述。
+- executing-plans / subagent-driven-development → build-debug（patterns.md）を Agent/Workflow ツール直呼びで実行（superpowersのサブエージェント規約に依存しない）。
+
+いずれも「多モデル編成の注入点」は保たれる。superpowers はフェーズ進行を楽にする補助であって、babelの多モデル価値の前提条件ではない。
+
 ## Phase 0 — トリアージ
 
 1. **リード選択**: ユーザーに質問する（AskUserQuestion等）— 「Fable5（現セッション）でリードするか、Opusでリードするか」。Opus推奨ケース: 最深推論が要る設計判断、難読バグの根本診断。Opus希望なら `/model` 切替をユーザー自身に案内する（スキル側では切替不可）。

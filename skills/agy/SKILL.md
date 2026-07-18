@@ -15,7 +15,7 @@ Claude とは異なる学習データ・推論パターンを持つ Antigravity 
 
 `agy -p` は **非 TTY (subprocess / pipe / redirect) で stdout を silently drop or ハング** する ([upstream issue #76](https://github.com/google-antigravity/antigravity-cli/issues/76))。v1.0.2 時点未修正。
 
-**回避策 (実装済):** [`agy_pty_wrapper.py`](agy_pty_wrapper.py) が pywinpty で ConPTY を確保し、その内側で agy を起動。agy の TTY 検出が成功し stdout が正常 flush される。動作確認済 (`PONG` 返却 ~30 秒)。
+**回避策 (実装済):** [`agy_pty_wrapper.py`](agy_pty_wrapper.py) が擬似端末 (PTY) を確保し、その内側で agy を起動。agy の TTY 検出が成功し stdout が正常 flush される。PTY バックエンドは OS 別に自動選択: **Windows = pywinpty (ConPTY) / Linux・macOS = ptyprocess**。呼び出し側 API は両者で同一 (pywinpty が Unix `ptyprocess` の API を意図的にミラー)。動作確認済 (Windows: `OK`/`PONG` 返却 ~30 秒。Unix 経路は静的レビュー済・実機未検証)。
 
 ## 前提条件
 
@@ -25,7 +25,7 @@ Claude とは異なる学習データ・推論パターンを持つ Antigravity 
 agy --version 2>&1 || "$LOCALAPPDATA/agy/bin/agy.exe" --version 2>&1
 ```
 
-Windows パス: `%LOCALAPPDATA%\agy\bin\agy.exe`（ユーザー名部分は環境依存）
+パス解決順 (wrapper が自動): まず `--agy-path` 明示。次は **OS 分岐** — Windows は `%LOCALAPPDATA%\agy\bin\agy.exe` → `PATH` (`shutil.which agy`)、Linux・macOS は `PATH` → POSIX 既定候補 (`~/.local/bin/agy`, `~/.antigravity/bin/agy`, `/usr/local/bin/agy`)。POSIX では PATH 上に `agy` があれば自動検出、無ければ `--agy-path` 指定。
 
 ### 2. 認証 (1 回のみ)
 
@@ -35,13 +35,16 @@ agy auth login
 
 PowerShell 起動 → ブラウザログイン。完了後永続。
 
-### 3. PTY wrapper 依存
+### 3. PTY wrapper 依存 (OS 別)
 
 ```bash
+# Windows:
 python -c "import winpty" 2>&1 || pip install pywinpty
+# Linux / macOS:
+python -c "import ptyprocess" 2>&1 || pip install ptyprocess
 ```
 
-`pywinpty` 必須。インストールされていなければ自動 install を試行。
+Windows は `pywinpty`、Linux・macOS は `ptyprocess` が必須。wrapper は当該 OS のバックエンドのみ import し、無ければ exit 4 でパッケージ名と `pip install` ヒントを表示する。
 
 ## Step 1: レビュー対象の決定
 
@@ -129,8 +132,8 @@ wrapper の stdout (ANSI 除去済) をパース。以下フォーマットで�
 | 症状 | 原因 / 対処 |
 |------|------------|
 | 出力が **`Python` の1語だけ**で即終了 (no review) | `python`/`python3` が **WindowsApps stub**(App実行エイリアス)で本物のインタプリタでない。**`python3.13`**(または `py -3.13`)で wrapper を起動する。本 SKILL のコマンド例の `python` は環境により要置換。 |
-| wrapper exit 4 + "pywinpty not installed" | `pip install pywinpty` 実行 |
-| wrapper exit 3 + "agy.exe not found" | `--agy-path` 指定 or インストール確認 |
+| wrapper exit 4 + "pywinpty/ptyprocess not installed" | 表示された `pip install <pkg>` を実行 (Windows=pywinpty / POSIX=ptyprocess) |
+| wrapper exit 3 + "agy executable not found" | `--agy-path` 指定 or インストール確認 (POSIX は PATH 上に `agy` があるか確認) |
 | wrapper exit 2 + 空 stdout | agy が TTY 内でも応答せず。auth 期限切れ確認: `agy auth login` 再実行 |
 | wrapper timeout (exit 2 + "Timeout after") | プロンプト巨大 or upstream 障害。`--timeout` 延長、`--print-timeout 5m` |
 | ハング 200 秒超 | Bash 側 timeout 切れ。wrapper の `--timeout` 値が Bash timeout 未満か確認 |
@@ -159,4 +162,4 @@ MD5 は既存システム互換のため意図的。新規パスワードは bcr
 
 ## 実装ファイル
 
-- [`agy_pty_wrapper.py`](agy_pty_wrapper.py) — pywinpty ConPTY wrapper (本スキル独自実装、bug #76 解消後も無害)
+- [`agy_pty_wrapper.py`](agy_pty_wrapper.py) — cross-platform PTY wrapper (Windows=pywinpty ConPTY / POSIX=ptyprocess、本スキル独自実装、bug #76 解消後も無害)
