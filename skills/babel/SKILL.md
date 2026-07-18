@@ -54,14 +54,14 @@ superpowers スキルが導入されていない環境では、babelは各フェ
 
 ## Phase 0 — トリアージ
 
-1. **リード選択**: ユーザーに質問する（AskUserQuestion等）— 「Fable5（現セッション）でリードするか、Opusでリードするか」。Opus推奨ケース: 最深推論が要る設計判断、難読バグの根本診断。Opus希望なら `/model` 切替をユーザー自身に案内する（スキル側では切替不可）。
+1. **リード選択（既定＋上書き）**: 既定で決め、毎回は訊かない — L または難読バグ根本診断は Opus 推奨、それ以外は現セッションのモデルがリード。編成提示（下記3）に「リード=◯◯（既定）」を明記し、ユーザーが変えたい時だけ上書きする。Opus 希望時は `/model` 切替をユーザー自身に案内（スキルは自分でモデルを切替できない）。
 2. **S/M/L判定**:
    - **S** = 単一ファイル・修正内容が明確
    - **M** = 複数ファイル・1機能
    - **L** = 新規システム・アーキテクチャ変更・不可逆/セキュリティ関連
    判定順序: L条件に1つでも該当→L。次にM条件に該当→M。残り→S（上から優先で判定する）。
    規模に応じた編成:
-   - **S**: 2体（リード＋SOL検証のみ）。設計ディベート省略、検収=SOL quick 1回。
+   - **S**: 2体（リード＋検収1系統）。設計ディベート省略。検収=**Claude敵対的レビュー1体**（外部依存を減らす。小diffでSOL quickはfalse positiveが出やすいため — 外部が既に立っていればSOL quickでも可）。
    - **M**: 3体（リード＋SOL＋agy）。検収1ラウンド。
    - **L**: 5体フル（Opus検証・Sonnetワーカー・検収ループ）。
 3. **提示と承認ゲート**: 編成案（S/M/L判定＋参加モデル＋適用パターン＋Sonnet委譲の有無・想定範囲）を自然言語でユーザーに提示し、承認を得てから開始する（ユーザーゲート「編成提示」）。**想定トークンを併記する**: 展開波（並列サブエージェント一斉発射）は容易に数百万トークン規模になる（パイロット2実測）ため、「1波あたり概算◯体×◯パターン=数百万トークン級」の桁感を編成提示に含め、消費同意を明確にする。ラウンド延長・deep上限超過など追加波を焚く局面でも都度、追加想定トークンを添えて確認する。承認後、`.babel/<task>/`（`<task>` はリードが付ける英数字ケバブケースslug、例: `add-pagination`）を初期化する（`spec.md` / `inbox/` / エージェント別結果ファイル`results/<agent>-r<N>.jsonl`規約 / `state.json` 初期値 `{"round":0,"rejected":[],"cursors":{},"budget":{"sol_calls":0,"sol_deep":0,"agy_calls":0}}` — 構造は `references/protocol.md` §5 ブラックボード参照）。
@@ -72,39 +72,29 @@ superpowers スキルが導入されていない環境では、babelは各フェ
 |---|---|---|
 | Phase 1 設計 | `#debate-aggregation` | M/Lのみ。Sはリード単独設計 |
 | Phase 2 実装 | `#build-debug` ＋ スタック時 `#sequential-switching` | 全規模 |
-| Phase 3 検収 | `#acceptance-gate` | S=quick 1回 / M=1ラウンド / L=フルループ |
+| Phase 3 検収 | `#acceptance-gate` | S=Claude敵対1体 / M=1ラウンド / L=フルループ |
 
 各パターンの発射コマンド雛形・チェックポイント手順・ループ終了条件は `references/patterns.md` の該当見出しを参照。ここでは繰り返さない。
 
 ## Fugu由来の規律（常時遵守）
 
-- **エージェント間隔離**: サブエージェント・外部LLMには TaskPacket の `inputs`（アクセスリスト）に列挙した先行成果物のみ渡す。会話履歴の丸ごと転送は禁止（orchestration collapse防止、references/protocol.md §2/§12）。
-- **同ラウンド内レビュアー相互ブラインド**: 同一ラウンドのレビュアーは互いのfindingを受け取らない。マージ・相互参照はリードのみ（references/protocol.md §8）。
-- **アンカリング防止**: リードは自案（DesignPacket相当）を書き切るまで外部の回答を読まない。
-- **共有状態の一元化**: 共有状態は plan文書＋ブラックボード（`.babel/<task>/`）のみ。それ以外の経路で状態を分散させない。
-- **Workflowは5ステップ以内**: 動的生成するWorkflowは5ステップ以内に収める（Fugu実証の上限）。
-- **詰まったら自発的に最大深度思考**: sequential-switching発火後もagyで解決せず・debate-aggregationの調停でも相違が埋まらず・acceptance-gateが4ラウンド上限に到達など「打開できずユーザーゲートに落ちる」直前の局面では、ユーザーへ投げる前にリード自身が一度だけ最大深度で再考する（ultrathink相当 — 前提を疑い、それまでの全試行・診断結果を並べて矛盾点を洗い直す。systematic-debuggingスキルの「3+ fixes failed = architectural problem」と同趣旨）。同局面でWorkflow経由のサブエージェント呼び出しを使うなら `effort: 'max'` に引き上げる。それでも解決しなければ通常通りユーザーゲートへ。
+Fugu の核となる規律は各所に実装済み。ここでは指す（再掲しない）:
+- エージェント間隔離（inputsアクセスリスト）→ `protocol.md` §2。
+- 同ラウンド内レビュアー相互ブラインド → `protocol.md` §8。
+- アンカリング防止（自案完成まで外部を読まない）→ `patterns.md` #debate-aggregation。
+- 共有状態の一元化（plan＋ブラックボードのみ）→ `protocol.md` §5。
+- **詰まったら自発的に最大深度思考**: 調停でも相違が埋まらず・検収capに達するなど「打開できずユーザーゲートに落ちる」直前で、投げる前にリードが一度だけ最大深度で再考する（ultrathink相当。全試行・診断を並べ矛盾を洗う。Workflow経由なら `effort: 'max'`）。それでも解決しなければユーザーゲートへ。
 
 ## コスト規律
 
-- SOL tier: checkpoint検証=quick / 設計・検収=normal / スタック診断・重要検収=deep。「重要検収」= L かつ セキュリティ/不可逆該当タスクの検収SOLのみ（deep上限内）。それ以外の検収はnormal。
-- **deep上限 = 1タスク2回まで**。超過時はユーザーに確認する。
 - Sonnet委譲基準: 「読む量が多く判断が浅い」作業のみ（リードのコンテキスト温存）。中核ロジック・設計判断はリードが書く。
 - 暗黙のtop-N切り捨て禁止 — 件数を絞る場合は明示する。
 - ラウンド毎の消費・レビュー済み範囲は `.babel/<task>/state.json` に記録する。
+- SOL tier の使い分け・deep上限（1タスク2回）は `references/advanced.md` §A7。
 
 ## 縮退表
 
-| 事象 | 対応 |
-|---|---|
-| agy死亡（bug #76 / auth切れ / 稀にMCPツール誘発時のprint-mode強制deny） | 2系統ゲート（リード＋SOL）に縮退、ユーザーに明示 |
-| agyペイロードがサイズ上限超過（大diff・インライン制約） | ハンク分割送信、または当該ラウンドagyを外し2系統に縮退、ユーザーに明示（未検証・パイロット2で実測要） |
-| SOL死亡（起動失敗/auth切れ/空出力） | S: 検収をagyまたはClaude敵対的レビューで代替+明示 / M/L: SOL系統を外し縮退+明示 |
-| `SOL_STILL_RUNNING` | `--attach <jobId>` で後続ターンに回収（cdx-sol SKILL.md参照） |
-| 両外部死亡 | Claude内3系統（Fable/Opus/Sonnet別視点）に代替。「独立性低下」を明示 |
-| 外部出力がschema非適合（散文・エラー文・空） | 形式行を再掲して1回だけ再依頼→再失敗ならそのラウンドは当該系統なしで続行、次ラウンドで復帰試行（チャネル障害扱い、findingとして摂取しない。references/protocol.md §7 schema検証ゲート） |
-| 外部の429/クォータ超過 | 該当系統を外した縮退構成に切替、ユーザーに明示 |
-| レビューループ発散 | 難度連動cap（既定4、収束傾向なら+2まで延長、横ばい/発散ラウンドのみcap消費。patterns.md終了条件参照）で打ち切り、残存findingをユーザー提示し受容判断を仰ぐ |
+障害時の縮退経路（agy死亡・SOL死亡・両外部死亡・schema非適合・429・ループ発散等）は `references/protocol.md` §10 が正典。
 
 ## 安全
 
@@ -116,25 +106,8 @@ superpowers スキルが導入されていない環境では、babelは各フェ
 
 ## AI間通信
 
-全AI間通信（TaskPacket/finding-jsonl/VerdictPacket/DesignPacket、転送形式、ブラックボード、縮退運転の詳細）は `references/protocol.md` 準拠。ユーザー向け自然言語 = ユーザーゲート4箇所（編成提示/設計相違点/検収結果/残存リスク）＋承認・確認質問（リード選択・deep上限超過確認・`--allow-write`承認・スタック時エスカレーション等）。AI間は常にワイヤ形式 — それ以外のAI↔AI通信は必ず references/protocol.md の構造化形式を使う。
+全AI間通信（TaskPacket/finding-jsonl/DesignPacket、転送形式、ブラックボード、縮退運転）は `references/protocol.md` 準拠（多ラウンド専用のグローバルID/VerdictPacket等は `references/advanced.md`）。ユーザー向け自然言語 = ユーザーゲート4箇所（編成提示/設計相違点/検収結果/残存リスク）＋必要な承認・確認（リード確認・`--allow-write`承認・スタック時エスカレーション等）。AI間は常にワイヤ形式。
 
-## 検証ステータス
+## 検証と沿革
 
-**パイロット1完了**（2026-07-17、実タスク実行）。実測結果を本ファイル・patterns.mdに反映済み:
-- debate-aggregationの多モデル価値を実証（SOL独立案がdoc SoT契約見落としを指摘、単独判断なら誤棄却していた可能性）。
-- Sonnet委譲カスケード（caller grep等の大量読み作業をリード外context化）が設計通り機能。
-- ブラックボード（spec.md/state.json/results/）のresume・write-once規約が機能。
-- agy 2連続障害の原因を特定・修正済み（2026-07-17事後診断）: agyのprint/headless modeはMCPツール確認を permissions.allow の内容に関わらず強制denyする（agy側の仕様、config変更では回避不可とログで確認）。環境のグローバルhookがMCPツール使用をnudgeする構成だと、プロンプトにコード探索を示唆する文言があると誘発されうる。fix: 全agy発射テンプレートに `Do not use any tools — answer directly from the text given above.` を追加（自己完結インライン方式と組み合わせれば通常発火しない、patterns.md反映済み）。再現テストで修正確認済み。稀に発火した場合は上表の縮退経路で吸収する。
-- checkpoint省略条件・M検収体数のdiffサイズ連動・SOL小diff検収の接地確認義務を追加（詳細はpatterns.md該当箇所）。
-- 設計相違点ユーザーゲートは接地証拠で相違解消したため不発火 — ゲート設計として正しい挙動と確認。
-- 追加実測（2026-07-17）: 完了待ちにScheduleWakeup空撃ちを使う無駄を確認 → 通知任せに規定（protocol.md §8）。agyインライン制約は大diffでリード側要約コストが乗る未検証の縮退領域と判明 → 縮退表に追加、パイロット2で実測。
-
-**パイロット2完了**（L相当フル編成・多数並列の実タスク）。効いた点: 設計ディベートが劣った設計採用を防いだ（生の回避策を3案一致で棄却し、より構造的な代替案を採用）／検収の異種多重化が別種の欠陥を拾った（SOL=コード監査・Opus=出力欠落・agy=独立クリーン判定）／「judge verdictもdata」原則で誤検出を接地棄却／一時作業名前空間+blackboardで衝突ゼロ。実測から本改訂に反映した6点:
-- 正典データチャネルをTaskPacket必須欄化（あるデータ複製タスクのdefect根因＝一次資料でなく画像読みだけでauthorさせたこと。protocol.md §2 `canon`、patterns.md debate-aggregation step 0）。
-- ネスト委譲を事前申告制に（c系統が無断で孫5体を編成し予算不可視化。protocol.md §5）。
-- SoT一方向規律を明文化（lead直編集後にstale blackboardで再マージし巻き戻り。protocol.md §5）。
-- 修理TaskPacketにfix前の再接地義務を標準文言化（R4が自発的に誤検出2件を防いだ。patterns.md acceptance-gate マージ手順4）。
-- iteration capを難度連動化（単一難所が7ラウンド要。patterns.md 終了条件、SKILL.md縮退表）。
-- 波あたり想定トークンをユーザーゲートで併記（展開波だけで数百万トークン級。Phase 0 承認ゲート）。
-
-設計根拠文書は開発時のローカルspec（本リポジトリ非同梱）。本スキル3ファイルは自己完結しており実行に不要。
+実測沿革（パイロット1/2/3の効いた点・調整根拠）は `PILOTS.md`（開発日誌、運用外）。本スキル3ファイル（＋任意で `references/advanced.md`）は自己完結しており実行に不要。

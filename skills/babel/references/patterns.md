@@ -13,9 +13,7 @@ Phase 1（設計）で使う。トリアージでM/Lと判定された場合の�
 2. **アンカリング防止バリア**: リードは外部の応答を読まずに自案（DesignPacket相当）を書き切る。順序はコードでなく手順で保証する — 外部呼び出しの出力を待つ・確認するアクションは自案完成後に置く。
 3. **L時のみ**: Claude内でも視点別（MVP-first / risk-first / user-first）の独立設計をWorkflowツールの `parallel()` でSonnet/Opus混成生成する（見取り図は acceptance-gate の雛形と同じ `agent()` API、schemaはDesignPacket形式）。
 4. **統合**: 全案（自案＋SOL＋agy＋Claude内視点）を合意点マトリクス＋相違点にまとめる。
-5. **調停者の動的選択**: 系統間の相違はリード固定でなく、そのドメイン最強モデルに調停委任してよい — アルゴリズム/数学的相違→SOL、広域知識/API仕様→agy、コード設計/文脈依存→リード。調停者には**相違点のみ**送付（合意分は送らない、protocol.md §7 合意済み相互確認禁止と同趣旨）。
-6. 調停でも埋まらない相違は、ユーザーゲートに落とす前にリードが最大深度で最終再考する（ultrathink相当、SKILL.md「詰まったら自発的に最大深度思考」参照）。それでも埋まらなければユーザー判断（ユーザーゲート「設計相違点」、protocol.md §0）。
-7. planに「クルー決定ログ」1セクションを追記: どのモデルが何を主張し、何を採用/棄却したか。
+5. **相違の解消**: 系統間の相違はまずリードが接地（一次資料/実コード）で埋める。ドメイン最強モデルへの動的調停委任（algorithmic→SOL / API仕様→agy、相違点のみ送付）は `advanced.md` §A4。埋まらなければリードが最大深度で最終再考（SKILL.md「詰まったら最大深度思考」）→ なおダメならユーザーゲート「設計相違点」。
 
 ### SOL発射コマンド雛形
 
@@ -51,58 +49,22 @@ Phase 2（実装）で使う。superpowers:executing-plans / subagent-driven-dev
 
 1. タスク分解後、機械的タスク（定型実装・置換・雛形埋め）は Sonnet サブエージェントへ委譲、中核ロジック（設計判断が要るコア実装）はリードが書く。
 2. **カスケード**: Sonnetが一次ドラフト/スクリーニングを行い、通過分のみ上位モデル（リード/Opus）が精査する。全件を上位モデルに通さない。
-3. **チェックポイント検証**: マイルストーン（1機能/1ファイル完成単位）ごとに、TaskPacket JSON（`goal='spec drift + bug check'`, `files=[{path:'<diffファイルパス>'}]`, `out_schema='finding-jsonl or NONE'`）を `.babel/<task>/inbox/checkpoint-r<N>.json` に書いてからSOL quickへ送る（argv直書き禁止、protocol.md §3）。
-   **省略条件**: そのマイルストーンのdiffがタスク最終changeset全体と一致する場合（1マイルストーンで完結する小タスク）、このチェックポイントは省略し、Phase 3検収のSOL呼び1回に統合する（同一対象への二重発射を避ける。パイロット1実測: 44行diffでcheckpointと検収が同一対象になった）。
+3. **チェックポイント検証（任意）**: マイルストーン毎に SOL quick で spec-drift/bug チェック。**省略条件**: マイルストーンdiffがタスク最終changeset全体と一致する小タスクは省略し Phase 3検収に統合（二重発射回避）。機構・発射雛形は `advanced.md` §A3。
+4. findingは finding-jsonl（protocol.md §2）で受理・schema検証ゲート（§7）。C/Hは即修正してから次へ、M/Lは記録し acceptance-gate で拾う。
 
-   ```bash
-   node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier quick --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/checkpoint-r<N>.json. Read that file and the referenced diff. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
-   ```
-
-   Bash `timeout: 600000`（cdx-sol SKILL.md必須）。出力形式はプロンプトにインライン埋め込み（SOLにprotocol.mdポインタは使わない、protocol.md §11）。
-4. 返ってきたfindingはprotocol.md §2 finding-jsonl形式で受理。schema検証ゲート（protocol.md §7）を通し、非適合ならチャネル障害として扱いこの回はスキップ（実装は止めない）。
-5. C/Hが出たら即修正してから次のマイルストーンへ進む。M/Lは記録だけして先送りしてよい（最終的にacceptance-gateで拾う）。
+**スタック時**（同一ファイル/シンボルで修正2回連続失敗）は `#sequential-switching` = `advanced.md` §A2（SOL deep→agy→リード最大深度→ユーザー）へ。
 
 ---
 
 ## sequential-switching
 
-Phase 2でスタックした時に使う。**発火条件**: 同一問題（同一ファイル/同一シンボル）で修正が2回連続失敗した場合。
-
-1. コンテキストパッケージをTaskPacketにマッピングする: `goal="diagnose: <症状1文>"` / `files=[対象ファイル]` / `inputs=[]` / `criteria=["root cause特定","修正案"]` / `constraints=["試行1: <要約+結果>","試行2: <要約+結果>","repro: <再現コマンド>"]` / `out_schema=`診断JSON（下記形式）。
-2. TaskPacket化して `.babel/<task>/inbox/` にファイルとして書く（protocol.md §3）。
-3. SOL deepへ診断交代:
-
-   ```bash
-   node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier deep --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/stuck-<n>.json. 2 consecutive fix attempts failed on the same issue. Diagnose root cause. Output diagnosis JSON only: {diagnosis:str, proposed_fix:str, confidence:high|med|low}. Example: {\"diagnosis\":\"race between timer and callback\",\"proposed_fix\":\"guard with generation counter\",\"confidence\":\"high\"}. No prose."
-   ```
-
-   Bash `timeout: 600000`（cdx-sol SKILL.md必須。deep実行は5-6分かかる）。診断JSONの形式はプロンプトにインライン指定（protocol.mdのパケット目録にはない専用形式 — VerdictPacket等と混同しない）。
-   **上限**: SOL deepは1タスク2回まで（超過時はユーザー確認）。
-
-### agy発射コマンド雛形（診断）
-
-SOLで解決しなかった場合の交代先。症状・試行2回分・対象コードhunkをインラインで渡す（agyはfs読み不可、protocol.md §1）。
-```bash
-PROMPT=$(cat <<'EOF'
-TaskPacket: {"goal":"diagnose: <症状1文>","files":[{"path":"<対象ファイル>"}],"inputs":[],"criteria":["root cause特定","修正案"],"constraints":["試行1: <要約+結果>","試行2: <要約+結果>","repro: <再現コマンド>"],"out_schema":"diagnosis"}
-2 consecutive fix attempts failed on the same issue. Target code hunk: <対象コードhunkをインライン貼付>
-Output diagnosis JSON only: {diagnosis:str, proposed_fix:str, confidence:high|med|low}. Example: {"diagnosis":"race between timer and callback","proposed_fix":"guard with generation counter","confidence":"high"}. No prose. Do not use any tools — answer directly from the text given above.
-EOF
-)
-python3.13 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 180
-```
-Bash側 `timeout: 200000` を併用（agy SKILL.md準拠）。
-
-4. SOLの診断で解決しなければ agy に交代（上記agy発射コマンド雛形で同じコンテキストパッケージをインライン送付）。
-5. agyでも外したら、ユーザーエスカレーション前にリード自身が最大深度で最終再考する（ultrathink相当、SKILL.md規律参照 — 試行1/試行2/SOL診断/agy診断を並べて矛盾点を洗い直す）。
-6. それでも解決しなければユーザーへエスカレーション（自然言語、ユーザーゲート）。
-7. 診断が採用可能なら通常の修正フローに戻り、build-debugのチェックポイント検証を再開する。
+Phase 2スタック時（同一問題で修正2回連続失敗）の診断交代プレイブック → `advanced.md` §A2。
 
 ---
 
 ## acceptance-gate
 
-Phase 3（検収）で使う。規模別の適用: S=SOL quick 1回のみ（本節の残りは実行しない。S検収はbuild-debugのチェックポイント雛形(quick)を流用する意図的なコスト縮退 — 通常検収=normalの例外）。M=1ラウンド: 3系統レビュー(a)(b)(c)+リードのマージ・C/H修正まで。ステップ5の再実行ループ・収束判定・completeness criticはL専用。Mで修正後の確認は変更影響レビュアー1回のみ（修正diffと交差するスコープを持つ系統のうち元findingを報告した系統1つのみ再実行。複数該当時はSOL優先）。L=本節フル。編成はSKILL.md Phase 0参照。
+Phase 3（検収）で使う。規模別の適用: **S=Claude敵対的レビュー1体のみ**（(a)を1体で実行、本節の残りは省略。外部が既に立っていればSOL quick可だが、小diffではSOL false positiveが出やすいのでClaude敵対を既定とする）。M=1ラウンド: 3系統レビュー(a)(b)(c)+リードのマージ・C/H修正まで。ステップ5の再実行ループ・収束判定・completeness criticはL専用。Mで修正後の確認は変更影響レビュアー1回のみ（修正diffと交差するスコープを持つ系統のうち元findingを報告した系統1つのみ再実行。複数該当時はSOL優先）。L=本節フル。編成はSKILL.md Phase 0参照。
 
 **レビュー対象 = Phase 3開始時点の実changeset**（実際に編集したファイル一覧を `git diff --name-only` 等で確定する）。Phase 0トリアージ時に見積もったファイルリストではない — 実装中にスコープ外の共有モジュールを触っていれば、それも含める（agy査読#8）。
 
@@ -117,87 +79,12 @@ Phase 3（検収）で使う。規模別の適用: S=SOL quick 1回のみ（本�
    - (b)(c)は `run_in_background` で同時発射。(a)はリードのセッション内で実行。
 2. **同ラウンド内レビュアー相互ブラインド**: (a)(b)(c)は互いのfindingを同ラウンド内で受け取らない。マージ・相互参照はリードのみが行う（protocol.md §8）。
 3. 全系統のfindingが揃ったらリードがマージする（下記マージ手順）。
-4. **調停者の動的選択**: 系統間で相違があれば、debate-aggregation節と同じ規則でドメイン最強モデルに調停委任可（相違点のみ送付）。
+4. 系統間の相違はリードが接地で埋める（動的調停は `advanced.md` §A4）。
 5. 収束条件を評価し、未収束なら該当レビュアーのみ再発射（変更影響ルーティング、protocol.md §9）。
 
 ### (a) Claude敵対的Workflow 雛形
 
-次元別（correctness / security / edge-cases / spec準拠）を `pipeline()` で並列生成 → 各findingを敵対的検証。機械的な一次生成stage=Sonnet effort low、生死判定stage=Opus effort high。`schema`オプションで構造化回収する。
-
-Workflow はClaude Code組み込みツール（スクリプト規約・agent()署名はツール定義が正）。Workflowツールが使えない環境では次元別レビューをAgentツール並列で代替する。
-
-```javascript
-export const meta = {
-  name: 'babel-acceptance-review',
-  description: '検収ゲート: 次元別並列レビュー + 敵対的検証',
-  phases: [
-    { title: 'Review', detail: '4次元並列 (Sonnet effort low)' },
-    { title: 'Verify', detail: '各findingをOpusが敵対的検証 (effort high)' },
-  ],
-}
-
-const CHANGESET = '<changeset diffファイルパス or ファイルリスト>'
-const CONTEXT = `対象: ${CHANGESET}。protocol.md の finding-jsonl 形式で報告せよ。severity(C/H/M/L)・file・line・claim・evidence(15-30tok)必須。憶測・スタイル好みは除外。`
-
-const FINDING_SCHEMA = {
-  type: 'object',
-  properties: {
-    findings: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          severity: { type: 'string', enum: ['C', 'H', 'M', 'L'] },
-          file: { type: 'string' },
-          line: { type: 'integer' },
-          claim: { type: 'string' },
-          evidence: { type: 'string' },
-        },
-        required: ['severity', 'file', 'line', 'claim', 'evidence'],
-      },
-    },
-  },
-  required: ['findings'],
-}
-
-const VERDICT_SCHEMA = {
-  type: 'object',
-  properties: {
-    real: { type: 'boolean' },
-    reason: { type: 'string' },
-  },
-  required: ['real', 'reason'],
-}
-
-const DIMENSIONS = [
-  { key: 'correctness', prompt: `${CONTEXT}\n\n次元: correctness。ロジック誤り・境界値・型不整合を探せ。` },
-  { key: 'security', prompt: `${CONTEXT}\n\n次元: security。injection・認証・機密露出を探せ。` },
-  { key: 'edge-cases', prompt: `${CONTEXT}\n\n次元: edge-cases。null/空/並行/リトライ時の破綻を探せ。` },
-  { key: 'spec-compliance', prompt: `${CONTEXT}\n\n次元: spec準拠。spec.md節ID参照で乖離を指摘せよ。` },
-]
-
-phase('Review')
-const results = await pipeline(
-  DIMENSIONS,
-  d => agent(d.prompt, { label: `review:${d.key}`, phase: 'Review', schema: FINDING_SCHEMA, model: 'sonnet', effort: 'low' }),
-  (res, d) => {
-    if (!res || !res.findings.length) return []
-    return parallel(res.findings.map(f => () =>
-      agent(`${CONTEXT}\n\n敵対的検証。反証するつもりでコードを読み、実際に成立するか判定せよ。\n所見(${d.key}): [${f.severity}] ${f.file}:${f.line} ${f.claim}\n根拠: ${f.evidence}`, {
-        label: `verify:${d.key}:${f.file}:${f.line}`, phase: 'Verify', schema: VERDICT_SCHEMA, model: 'opus', effort: 'high',
-      }).then(v => ({ ...f, dimension: d.key, verdict: v }))
-    ))
-  }
-)
-
-const all = results.filter(Boolean).flat().filter(Boolean)
-const confirmed = all.filter(f => f.verdict && f.verdict.real)
-const rejected = all.filter(f => !f.verdict || !f.verdict.real)
-log(`所見 ${all.length} 件中 ${confirmed.length} 件が検証を通過`)
-return { confirmed, rejectedCount: rejected.length }
-```
-
-Workflow内のschema出力（object形式/`{real,reason}`等）は内部形式。リードがマージ時にfinding-jsonl＋グローバルIDへ正規化する。
+次元別（correctness / security / edge-cases / spec準拠）を `pipeline()` で並列生成 → 各findingを敵対的検証（Sonnet一次生成 → Opus生死判定）。**(a)のWorkflow全文雛形（JS）は `advanced.md` §A6**。(a)のWorkflow敵対的検証はL専用。**MではリードがAgent並列で簡略レビュー**（Opus判定stageは使わない）。Workflowツールが無い環境も次元別レビューをAgent並列で代替。
 
 ### (b)(c) 雛形
 
@@ -231,6 +118,5 @@ Bash `timeout: 300000` + `run_in_background: true`。changeset全体レビュー
 
 ### 終了条件
 
-- **収束**: あるラウンドで新規C/Hゼロ、かつその直後に呼ぶcompleteness criticも空。ラウンド1でクリーンならcriticを実行し、空なら即収束（2ラウンド目は不要）。修正が発生した場合のみ該当系統を再実行し、修正後ラウンドが新規C/Hゼロ＋critic空で収束とする。
-- **上限（難度連動）**: 既定4ラウンド。ただし固定cap は難所を早期に切り上げて未収束を残す（パイロット2: 単一難所が7ラウンド要した）。**新規C/Hが毎ラウンド減り続けている間はcapを消費しない**（収束傾向なら上限を+2まで自動延長）。減らずに横ばい/発散したラウンドのみcapを1消費する。延長する場合はユーザーに一言明示（想定トークン増を含む）。到達前にリードが最大深度で最終再考を一度行う（ultrathink相当、SKILL.md規律参照）。それでも新規C/Hが残る場合は残存findingをユーザーに提示し受容判断を仰ぐ（ユーザーゲート「検収結果」/「残存リスク」）。
-- **completeness critic**: 問いは1つだけ固定: 「未カバーの次元・未検証の主張・未読ファイルは？」。何か出たら次ラウンドの種にする。
+- **収束**: あるラウンドで新規C/Hゼロ、かつ直後の completeness critic（L専用、`advanced.md` §A5）も空。ラウンド1でクリーンなら即収束。修正が発生した場合のみ該当系統を再実行し、修正後ラウンドが新規C/Hゼロで収束。
+- **上限（難度連動）**: 既定4ラウンド。**新規C/Hが毎ラウンド減り続けている間はcapを消費しない**（収束傾向なら+2まで自動延長、パイロット2の単一難所は7ラウンド要）。横ばい/発散ラウンドのみcapを1消費。延長時はユーザーに一言明示（想定トークン増含む）。cap到達前にリードが最大深度で最終再考を一度行う。なお新規C/Hが残れば残存findingをユーザー提示（ユーザーゲート「検収結果」/「残存リスク」）。
