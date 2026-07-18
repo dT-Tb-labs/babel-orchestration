@@ -1,0 +1,7 @@
+# Keep shell/Python/JS line endings as LF on every platform so the POSIX
+# installer and PTY wrapper are not CRLF-corrupted on a Windows checkout
+# (a CRLF shebang breaks `#!/usr/bin/env sh` and heredoc terminators on Linux).
+* text=auto
+*.sh  text eol=lf
+*.py  text eol=lf
+*.mjs text eol=lf

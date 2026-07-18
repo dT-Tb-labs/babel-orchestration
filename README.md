@@ -37,12 +37,20 @@ skills/
     cdx-sol.mjs            # background+poll wrapper around codex-companion (Node, no deps)
   agy/
     SKILL.md
-    agy_pty_wrapper.py     # ConPTY wrapper working around agy bug #76 (Python, pywinpty)
+    agy_pty_wrapper.py     # cross-platform PTY wrapper for agy bug #76 (pywinpty / ptyprocess)
 ```
 
 ## Install
 
-Copy the three skill directories into your Claude Code skills folder:
+Run the installer — it copies the three skills into `~/.claude/skills/` and
+self-tests each channel (missing optional channels are warnings, not errors):
+
+```bash
+sh install.sh            # install + self-test
+sh install.sh --check    # self-test only, no copy
+```
+
+Or copy manually:
 
 ```bash
 cp -r skills/babel  skills/cdx-sol  skills/agy  ~/.claude/skills/
@@ -50,6 +58,11 @@ cp -r skills/babel  skills/cdx-sol  skills/agy  ~/.claude/skills/
 
 The internal references use portable `$HOME/.claude/skills/...` paths, so no
 editing is needed as long as all three live under `~/.claude/skills/`.
+
+**Minimal setup:** only `babel` + Claude Code is required. `cdx-sol` and `agy`
+are optional independent-review channels — babel runs with whatever you have and
+tells you when a channel is degraded off. See the "依存と最小構成" section in
+`skills/babel/SKILL.md` for the Claude-only (single-channel) mode.
 
 Then invoke from Claude Code:
 
@@ -71,11 +84,16 @@ Then invoke from Claude Code:
 - A ChatGPT subscription authenticated via `codex login`
 - Self-test: `node skills/cdx-sol/cdx-sol.mjs --selftest`
 
-**agy** (optional channel, Windows):
+**agy** (optional channel, cross-platform):
 - Google Antigravity CLI (`agy`) installed and `agy auth login` completed
-- Python 3.13 + `pywinpty` (`pip install pywinpty`)
-- The wrapper uses Windows ConPTY, so this channel is Windows-only. On other
-  platforms drop the `agy` channel (babel degrades to a 2-channel gate).
+- Python 3.x + a PTY backend: `pywinpty` on Windows, `ptyprocess` on
+  Linux/macOS (`pip install pywinpty` / `pip install ptyprocess`)
+- The wrapper picks the backend per-OS automatically (Windows ConPTY via
+  pywinpty; Unix pty via ptyprocess) and resolves the `agy` binary via
+  `--agy-path` first, then **per-OS**: on Windows the `%LOCALAPPDATA%` default
+  then `PATH`; on Linux/macOS `PATH` then `~/.local/bin`, `~/.antigravity/bin`,
+  `/usr/local/bin`. The Windows path is production-tested; the Unix path is
+  review-verified but not yet runtime-tested on Linux/macOS.
 
 ## Safety model
 

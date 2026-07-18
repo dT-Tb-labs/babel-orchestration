@@ -1,0 +1,105 @@
+#!/usr/bin/env sh
+# install.sh — install the babel / cdx-sol / agy skill set into ~/.claude/skills
+# and self-test each channel. babel (the lead) is the only hard requirement;
+# cdx-sol and agy are optional force-multiplier channels — a missing one is a
+# warning, not a failure (babel degrades to fewer channels at runtime).
+#
+# Usage:
+#   sh install.sh              # install + self-test
+#   sh install.sh --check      # self-test only, no copy
+#   CLAUDE_SKILLS=/path sh install.sh   # override destination
+set -eu
+
+SRC_DIR="$(CDPATH= cd "$(dirname "$0")/skills" && pwd)"
+DEST="${CLAUDE_SKILLS:-$HOME/.claude/skills}"
+CHECK_ONLY=0
+[ "${1:-}" = "--check" ] && CHECK_ONLY=1
+
+pass=0; warn=0
+ok()   { printf '  [ok]   %s\n' "$1"; }
+note() { printf '  [warn] %s\n' "$1"; warn=$((warn+1)); }
+
+# agy_present: mirror agy_pty_wrapper.py's resolve_agy_path so the self-test does
+# not warn "degrade off" for an agy the wrapper would actually resolve.
+agy_present() {
+  command -v agy >/dev/null 2>&1 && return 0
+  if [ "$OS" = windows ]; then
+    [ -f "${LOCALAPPDATA:-}/agy/bin/agy.exe" ] && return 0
+  else
+    for p in "$HOME/.local/bin/agy" "$HOME/.antigravity/bin/agy" /usr/local/bin/agy; do
+      [ -f "$p" ] && return 0
+    done
+  fi
+  return 1
+}
+
+# ---- OS detection (for the PTY backend hint) ----
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*|Windows_NT) OS=windows ; PTY_PKG=pywinpty ;;
+  *) OS=posix ; PTY_PKG=ptyprocess ;;
+esac
+
+# ---- copy ----
+if [ "$CHECK_ONLY" -eq 0 ]; then
+  printf 'Installing skills -> %s\n' "$DEST"
+  mkdir -p "$DEST"
+  for s in babel cdx-sol agy; do
+    if [ -d "$SRC_DIR/$s" ]; then
+      rm -rf "$DEST/$s"
+      cp -R "$SRC_DIR/$s" "$DEST/$s"
+      ok "copied $s"
+    else
+      note "source skill missing: $s (skipped)"
+    fi
+  done
+fi
+
+# ---- self-test ----
+printf '\nSelf-test:\n'
+
+# babel (required): files present at destination
+if [ -f "$DEST/babel/SKILL.md" ] && [ -f "$DEST/babel/references/protocol.md" ] && [ -f "$DEST/babel/references/patterns.md" ]; then
+  ok "babel (lead) installed"
+  pass=$((pass+1))
+else
+  printf '  [FAIL] babel not installed at %s — this is the one hard requirement.\n' "$DEST"
+  exit 1
+fi
+# babel runtime prereqs (superpowers + Workflow tool) live inside Claude Code and
+# cannot be probed from a shell — see skills/babel/SKILL.md "依存と縮退".
+note "babel needs the superpowers skill set + Workflow tool inside Claude Code (not shell-checkable; see SKILL.md)"
+
+# cdx-sol (optional): Node + companion + auth
+if command -v node >/dev/null 2>&1; then
+  if [ -f "$DEST/cdx-sol/cdx-sol.mjs" ] && node "$DEST/cdx-sol/cdx-sol.mjs" --selftest >/dev/null 2>&1; then
+    ok "cdx-sol channel ready (node + companion + auth)"
+  else
+    note "cdx-sol present but self-test failed — check Codex CLI install + 'codex login'. Channel will degrade off."
+  fi
+else
+  note "node not found — cdx-sol channel unavailable (babel degrades to fewer channels)"
+fi
+
+# agy (optional): PTY backend + agy binary
+PYTHON=""
+for c in python3.13 python3 python; do command -v "$c" >/dev/null 2>&1 && { PYTHON="$c"; break; }; done
+if [ -n "$PYTHON" ]; then
+  if "$PYTHON" - <<PYEOF >/dev/null 2>&1
+import importlib, sys
+importlib.import_module("winpty" if sys.platform.startswith("win") else "ptyprocess")
+PYEOF
+  then
+    if agy_present; then
+      ok "agy channel ready ($PYTHON + $PTY_PKG + agy binary)"
+    else
+      note "agy binary not found (PATH or known locations) — install agy + 'agy auth login', or pass --agy-path. Channel will degrade off."
+    fi
+  else
+    note "$PTY_PKG not installed for $PYTHON — run: $PYTHON -m pip install $PTY_PKG (agy channel degrades off)"
+  fi
+else
+  note "python not found — agy channel unavailable (babel degrades to fewer channels)"
+fi
+
+printf '\nDone. %d required OK, %d optional warning(s).\n' "$pass" "$warn"
+printf 'babel runs with whatever channels passed above; missing optional channels just reduce independent review depth.\n'
