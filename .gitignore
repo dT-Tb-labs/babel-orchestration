@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# babel/cdx-sol runtime scratch (never commit model output or blackboards)
+.babel/
+.sol/
+
+# OS
+.DS_Store
+Thumbs.db
