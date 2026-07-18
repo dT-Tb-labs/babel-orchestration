@@ -1,0 +1,236 @@
+# babel フェーズ別プレイブック
+
+読者: babelを実行中のリードLLM。各節はSKILL.mdの各フェーズから参照される実行可能手順。通信規則・パケット形式・エラー処理は本ファイルでは再掲しない → **protocol.md 参照**。ここは「いつ・誰に・何を・どの順で投げるか」のみを扱う。
+
+---
+
+## debate-aggregation
+
+Phase 1（設計）で使う。トリアージでM/Lと判定された場合のみ実施。Sは省略しリード単独設計。
+
+0. **正典データチャネルの確定**（複製/データ系タスクのみ、設計より先）: 成果物が接地すべき一次資料と「劣化しない読み方」をこの段で決め、TaskPacketの `canon` 欄（protocol.md §2）に載せる。これを設計後・検収後に後付けすると、実装ワーカーが手近な劣化経路（画像OCRだけ・スクショ目視だけ）で埋めて欠落を作る（実タスクで観測したdefect根因）。以降の全実装/修理TaskPacketに `canon` を継承させる。データ系でないタスクはこのステップを飛ばす。
+1. **並列発射**: superpowers:brainstorming でユーザー質疑を終えたら、リードが自案を書き始める**前に** SOL+agy へ同一のDesignPacket要求（TaskPacket, out_schema=DesignPacket。protocol.md §2）を `run_in_background` で同時発射する。
+2. **アンカリング防止バリア**: リードは外部の応答を読まずに自案（DesignPacket相当）を書き切る。順序はコードでなく手順で保証する — 外部呼び出しの出力を待つ・確認するアクションは自案完成後に置く。
+3. **L時のみ**: Claude内でも視点別（MVP-first / risk-first / user-first）の独立設計をWorkflowツールの `parallel()` でSonnet/Opus混成生成する（見取り図は acceptance-gate の雛形と同じ `agent()` API、schemaはDesignPacket形式）。
+4. **統合**: 全案（自案＋SOL＋agy＋Claude内視点）を合意点マトリクス＋相違点にまとめる。
+5. **調停者の動的選択**: 系統間の相違はリード固定でなく、そのドメイン最強モデルに調停委任してよい — アルゴリズム/数学的相違→SOL、広域知識/API仕様→agy、コード設計/文脈依存→リード。調停者には**相違点のみ**送付（合意分は送らない、protocol.md §7 合意済み相互確認禁止と同趣旨）。
+6. 調停でも埋まらない相違は、ユーザーゲートに落とす前にリードが最大深度で最終再考する（ultrathink相当、SKILL.md「詰まったら自発的に最大深度思考」参照）。それでも埋まらなければユーザー判断（ユーザーゲート「設計相違点」、protocol.md §0）。
+7. planに「クルー決定ログ」1セクションを追記: どのモデルが何を主張し、何を採用/棄却したか。
+
+### SOL発射コマンド雛形
+
+ペイロードは `.babel/<task>/inbox/design-req.json` に書き、SOLには `--cwd` 経由で自己読みさせる（protocol.md §3、argv上限回避）。SOLにはprotocol.mdポインタを使わず、出力形式を都度インラインで埋め込む（protocol.md §11）。
+
+```bash
+node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON."
+```
+
+- `--tier normal`（設計は normal、診断/重要検収は deep）。
+- Bash `timeout: 600000`（cdx-sol SKILL.md必須。デフォルト120sでは長時間実行が殺される）＋ `run_in_background: true`。完了通知はagyと合わせて待ち合わせる。
+
+### agy発射コマンド雛形
+
+agyはfs読み不可（protocol.md §1）→ spec.mdへのパス参照はせず、spec要点（goal/criteria/constraints）をプロンプトにインライン化する。python3.13＋heredoc環境変数方式（agy SKILL.md準拠、ダブルクォート事故回避）。ペイロードはdiffハンク相当のみに絞りサイズ上限を意識（超過時は要約して送る）。
+
+```bash
+PROMPT=$(cat <<'EOF'
+TaskPacket: {"goal":"independent design for <task概要>. Spec要点: <spec.mdのgoal/criteria/constraintsを要約してここにインライン>","files":[],"inputs":[],"criteria":["<受入基準>"],"constraints":["<制約>"],"out_schema":"DesignPacket"}
+Output DesignPacket JSON only, no prose. Do not use any tools — answer directly from the text given above.
+EOF
+)
+python3.13 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 180
+```
+
+Bash側 `timeout: 200000` を併用（agy SKILL.md準拠）。
+
+---
+
+## build-debug
+
+Phase 2（実装）で使う。superpowers:executing-plans / subagent-driven-development に接続する。babel固有の追加はチェックポイント検証とモデル割当のみ。
+
+1. タスク分解後、機械的タスク（定型実装・置換・雛形埋め）は Sonnet サブエージェントへ委譲、中核ロジック（設計判断が要るコア実装）はリードが書く。
+2. **カスケード**: Sonnetが一次ドラフト/スクリーニングを行い、通過分のみ上位モデル（リード/Opus）が精査する。全件を上位モデルに通さない。
+3. **チェックポイント検証**: マイルストーン（1機能/1ファイル完成単位）ごとに、TaskPacket JSON（`goal='spec drift + bug check'`, `files=[{path:'<diffファイルパス>'}]`, `out_schema='finding-jsonl or NONE'`）を `.babel/<task>/inbox/checkpoint-r<N>.json` に書いてからSOL quickへ送る（argv直書き禁止、protocol.md §3）。
+   **省略条件**: そのマイルストーンのdiffがタスク最終changeset全体と一致する場合（1マイルストーンで完結する小タスク）、このチェックポイントは省略し、Phase 3検収のSOL呼び1回に統合する（同一対象への二重発射を避ける。パイロット1実測: 44行diffでcheckpointと検収が同一対象になった）。
+
+   ```bash
+   node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier quick --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/checkpoint-r<N>.json. Read that file and the referenced diff. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
+   ```
+
+   Bash `timeout: 600000`（cdx-sol SKILL.md必須）。出力形式はプロンプトにインライン埋め込み（SOLにprotocol.mdポインタは使わない、protocol.md §11）。
+4. 返ってきたfindingはprotocol.md §2 finding-jsonl形式で受理。schema検証ゲート（protocol.md §7）を通し、非適合ならチャネル障害として扱いこの回はスキップ（実装は止めない）。
+5. C/Hが出たら即修正してから次のマイルストーンへ進む。M/Lは記録だけして先送りしてよい（最終的にacceptance-gateで拾う）。
+
+---
+
+## sequential-switching
+
+Phase 2でスタックした時に使う。**発火条件**: 同一問題（同一ファイル/同一シンボル）で修正が2回連続失敗した場合。
+
+1. コンテキストパッケージをTaskPacketにマッピングする: `goal="diagnose: <症状1文>"` / `files=[対象ファイル]` / `inputs=[]` / `criteria=["root cause特定","修正案"]` / `constraints=["試行1: <要約+結果>","試行2: <要約+結果>","repro: <再現コマンド>"]` / `out_schema=`診断JSON（下記形式）。
+2. TaskPacket化して `.babel/<task>/inbox/` にファイルとして書く（protocol.md §3）。
+3. SOL deepへ診断交代:
+
+   ```bash
+   node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier deep --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/stuck-<n>.json. 2 consecutive fix attempts failed on the same issue. Diagnose root cause. Output diagnosis JSON only: {diagnosis:str, proposed_fix:str, confidence:high|med|low}. Example: {\"diagnosis\":\"race between timer and callback\",\"proposed_fix\":\"guard with generation counter\",\"confidence\":\"high\"}. No prose."
+   ```
+
+   Bash `timeout: 600000`（cdx-sol SKILL.md必須。deep実行は5-6分かかる）。診断JSONの形式はプロンプトにインライン指定（protocol.mdのパケット目録にはない専用形式 — VerdictPacket等と混同しない）。
+   **上限**: SOL deepは1タスク2回まで（超過時はユーザー確認）。
+
+### agy発射コマンド雛形（診断）
+
+SOLで解決しなかった場合の交代先。症状・試行2回分・対象コードhunkをインラインで渡す（agyはfs読み不可、protocol.md §1）。
+```bash
+PROMPT=$(cat <<'EOF'
+TaskPacket: {"goal":"diagnose: <症状1文>","files":[{"path":"<対象ファイル>"}],"inputs":[],"criteria":["root cause特定","修正案"],"constraints":["試行1: <要約+結果>","試行2: <要約+結果>","repro: <再現コマンド>"],"out_schema":"diagnosis"}
+2 consecutive fix attempts failed on the same issue. Target code hunk: <対象コードhunkをインライン貼付>
+Output diagnosis JSON only: {diagnosis:str, proposed_fix:str, confidence:high|med|low}. Example: {"diagnosis":"race between timer and callback","proposed_fix":"guard with generation counter","confidence":"high"}. No prose. Do not use any tools — answer directly from the text given above.
+EOF
+)
+python3.13 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 180
+```
+Bash側 `timeout: 200000` を併用（agy SKILL.md準拠）。
+
+4. SOLの診断で解決しなければ agy に交代（上記agy発射コマンド雛形で同じコンテキストパッケージをインライン送付）。
+5. agyでも外したら、ユーザーエスカレーション前にリード自身が最大深度で最終再考する（ultrathink相当、SKILL.md規律参照 — 試行1/試行2/SOL診断/agy診断を並べて矛盾点を洗い直す）。
+6. それでも解決しなければユーザーへエスカレーション（自然言語、ユーザーゲート）。
+7. 診断が採用可能なら通常の修正フローに戻り、build-debugのチェックポイント検証を再開する。
+
+---
+
+## acceptance-gate
+
+Phase 3（検収）で使う。規模別の適用: S=SOL quick 1回のみ（本節の残りは実行しない。S検収はbuild-debugのチェックポイント雛形(quick)を流用する意図的なコスト縮退 — 通常検収=normalの例外）。M=1ラウンド: 3系統レビュー(a)(b)(c)+リードのマージ・C/H修正まで。ステップ5の再実行ループ・収束判定・completeness criticはL専用。Mで修正後の確認は変更影響レビュアー1回のみ（修正diffと交差するスコープを持つ系統のうち元findingを報告した系統1つのみ再実行。複数該当時はSOL優先）。L=本節フル。編成はSKILL.md Phase 0参照。
+
+**レビュー対象 = Phase 3開始時点の実changeset**（実際に編集したファイル一覧を `git diff --name-only` 等で確定する）。Phase 0トリアージ時に見積もったファイルリストではない — 実装中にスコープ外の共有モジュールを触っていれば、それも含める（agy査読#8）。
+
+**CHANGESETの実体**: Phase 3開始時、リードが `.babel/<task>/inbox/changeset.diff`（unified diff）＋変更ファイル一覧を作成する。fs読み可能なレビュアー（SOL/Claudeサブエージェント）はパスで受領し、agyはハンクをインラインで受け取る。spec準拠レビューは `.babel/<task>/spec.md` を同様に配布する（agyには要点をインライン化）。
+
+### 手順
+
+1. changesetを確定し、3系統を発射する。
+   - (a) Claude敵対的Workflow: リードがその場でWorkflowスクリプトを動的生成・実行（雛形は下記）。(a)のWorkflow敵対的検証はL専用。MではリードがAgent並列で簡略レビューし、Opus判定stageは使わない。**体数はdiffサイズ連動**（目安、行数はchangeset全体）: 50行未満=1体（全次元を1体でカバー）／50-200行=2体／200行超=3体（次元分割）。パイロット1実測: 44行diffに3体は過剰、1体に縮約。
+   - (b) agy: changesetのdiffハンクをインラインでレビュー依頼。
+   - (c) SOL normal: `.babel/<task>/inbox/` 経由でchangesetパスを渡しレビュー依頼。
+   - (b)(c)は `run_in_background` で同時発射。(a)はリードのセッション内で実行。
+2. **同ラウンド内レビュアー相互ブラインド**: (a)(b)(c)は互いのfindingを同ラウンド内で受け取らない。マージ・相互参照はリードのみが行う（protocol.md §8）。
+3. 全系統のfindingが揃ったらリードがマージする（下記マージ手順）。
+4. **調停者の動的選択**: 系統間で相違があれば、debate-aggregation節と同じ規則でドメイン最強モデルに調停委任可（相違点のみ送付）。
+5. 収束条件を評価し、未収束なら該当レビュアーのみ再発射（変更影響ルーティング、protocol.md §9）。
+
+### (a) Claude敵対的Workflow 雛形
+
+次元別（correctness / security / edge-cases / spec準拠）を `pipeline()` で並列生成 → 各findingを敵対的検証。機械的な一次生成stage=Sonnet effort low、生死判定stage=Opus effort high。`schema`オプションで構造化回収する。
+
+Workflow はClaude Code組み込みツール（スクリプト規約・agent()署名はツール定義が正）。Workflowツールが使えない環境では次元別レビューをAgentツール並列で代替する。
+
+```javascript
+export const meta = {
+  name: 'babel-acceptance-review',
+  description: '検収ゲート: 次元別並列レビュー + 敵対的検証',
+  phases: [
+    { title: 'Review', detail: '4次元並列 (Sonnet effort low)' },
+    { title: 'Verify', detail: '各findingをOpusが敵対的検証 (effort high)' },
+  ],
+}
+
+const CHANGESET = '<changeset diffファイルパス or ファイルリスト>'
+const CONTEXT = `対象: ${CHANGESET}。protocol.md の finding-jsonl 形式で報告せよ。severity(C/H/M/L)・file・line・claim・evidence(15-30tok)必須。憶測・スタイル好みは除外。`
+
+const FINDING_SCHEMA = {
+  type: 'object',
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          severity: { type: 'string', enum: ['C', 'H', 'M', 'L'] },
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          claim: { type: 'string' },
+          evidence: { type: 'string' },
+        },
+        required: ['severity', 'file', 'line', 'claim', 'evidence'],
+      },
+    },
+  },
+  required: ['findings'],
+}
+
+const VERDICT_SCHEMA = {
+  type: 'object',
+  properties: {
+    real: { type: 'boolean' },
+    reason: { type: 'string' },
+  },
+  required: ['real', 'reason'],
+}
+
+const DIMENSIONS = [
+  { key: 'correctness', prompt: `${CONTEXT}\n\n次元: correctness。ロジック誤り・境界値・型不整合を探せ。` },
+  { key: 'security', prompt: `${CONTEXT}\n\n次元: security。injection・認証・機密露出を探せ。` },
+  { key: 'edge-cases', prompt: `${CONTEXT}\n\n次元: edge-cases。null/空/並行/リトライ時の破綻を探せ。` },
+  { key: 'spec-compliance', prompt: `${CONTEXT}\n\n次元: spec準拠。spec.md節ID参照で乖離を指摘せよ。` },
+]
+
+phase('Review')
+const results = await pipeline(
+  DIMENSIONS,
+  d => agent(d.prompt, { label: `review:${d.key}`, phase: 'Review', schema: FINDING_SCHEMA, model: 'sonnet', effort: 'low' }),
+  (res, d) => {
+    if (!res || !res.findings.length) return []
+    return parallel(res.findings.map(f => () =>
+      agent(`${CONTEXT}\n\n敵対的検証。反証するつもりでコードを読み、実際に成立するか判定せよ。\n所見(${d.key}): [${f.severity}] ${f.file}:${f.line} ${f.claim}\n根拠: ${f.evidence}`, {
+        label: `verify:${d.key}:${f.file}:${f.line}`, phase: 'Verify', schema: VERDICT_SCHEMA, model: 'opus', effort: 'high',
+      }).then(v => ({ ...f, dimension: d.key, verdict: v }))
+    ))
+  }
+)
+
+const all = results.filter(Boolean).flat().filter(Boolean)
+const confirmed = all.filter(f => f.verdict && f.verdict.real)
+const rejected = all.filter(f => !f.verdict || !f.verdict.real)
+log(`所見 ${all.length} 件中 ${confirmed.length} 件が検証を通過`)
+return { confirmed, rejectedCount: rejected.length }
+```
+
+Workflow内のschema出力（object形式/`{real,reason}`等）は内部形式。リードがマージ時にfinding-jsonl＋グローバルIDへ正規化する。
+
+### (b)(c) 雛形
+
+(c) SOL: build-debugのチェックポイント雛形を流用し goalを検収用に変更。
+```bash
+node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --cwd "<repo>" "TaskPacket: goal='full review of changeset', files=[{path:'<changesetファイルリストパス>'}], out_schema='finding-jsonl or NONE'. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence 15-30tok>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
+```
+Bash `timeout: 600000` + `run_in_background: true`。L かつ セキュリティ/不可逆該当タスクの重要検収は `--tier deep` に差し替える（SKILL.mdコスト規律参照）。
+
+(b) agy: PTY wrapper。changesetのdiffハンクをインラインで渡し、finding-jsonl形式行＋例1行をプロンプト内に含める（SOL同様インライン）。ペイロードはサイズ上限を意識し、超過時は分割または縮退する（設計雛形と同基準、protocol.md §3）。
+```bash
+PROMPT=$(cat <<'EOF'
+TaskPacket: {"goal":"full review of changeset","files":[{"path":"<diffハンク要約>"}],"inputs":[],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
+Diff hunk: <変更diffハンクをインライン貼付>
+Output one JSON array per line: ["<id>","<sev C|H|M|L>","<file>",<line>,"<claim>","<evidence 15-30tok>"]. Example: ["F1","C","auth.py",42,"token expiry unchecked","verify_token() decodes JWT without checking exp claim"]. Output NONE (single word) if clean. No prose. Do not use any tools — answer directly from the text given above.
+EOF
+)
+python3.13 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 240
+```
+Bash `timeout: 300000` + `run_in_background: true`。changeset全体レビューは設計依頼より重いためagyタイムアウトを240/300000に延長（意図的）。
+
+### マージ手順
+
+1. **指紋dedup**: `{path, シンボル（関数名/spec節ID）, 違反不変条件}` で照合。行番号はdedupキーに使わない（protocol.md §7）。照合はリードによる意味比較。
+2. 既出リスト＋棄却済みリスト**両方**に対して照合する（再浮上ループ防止）。
+3. C/Hのみ検証: 生存finding 8-12件/1呼びでバッチ化。repro実行可能なら再現コマンド/失敗テストで検証、不能なら不変条件論証で代替（protocol.md §7、repro安全規則も同節）。
+   **小diffでのSOL findingは要接地確認**: changesetが小さい（目安50行未満）ほどSOL検収findingはfalse positive率が上がる（パイロット1実測: 実在しないtrailing whitespace指摘）。SOL単独findingかつ小diffの場合、検証段階で該当ファイルの実際の行を必ず確認してから採用する（他系統と一致するfindingは優先度を上げてよい）。S検収（SOL quick 1回のみ）でも同様に適用する。
+4. 検証通過分を修正する。**修理前の再接地義務**: 監査findingをそのまま信じて修正しない。fixに着手する前に、該当箇所を一次資料（`canon` チャネル・実ファイルの当該行）で再確認し、findingの前提が実際に成立するか検証する。監査は誤検出しうる（パイロット2: R4系統が自発的に再接地して誤検出2件を防いだ）。修理TaskPacketには `constraints` に「fix前に canon で再接地し、finding前提を確認せよ」を必ず入れる。
+5. **変更影響ルーティング**で再実行: 修正したファイル/関数が前回スコープまたは未解決findingと交差するレビュアーのみ再発射する（無関係レビュアーへの再送はしない）。
+6. M/LはC/Hと同様に行出力させておくが検証・修正はしない。最終報告でまとめてユーザー提示。
+
+### 終了条件
+
+- **収束**: あるラウンドで新規C/Hゼロ、かつその直後に呼ぶcompleteness criticも空。ラウンド1でクリーンならcriticを実行し、空なら即収束（2ラウンド目は不要）。修正が発生した場合のみ該当系統を再実行し、修正後ラウンドが新規C/Hゼロ＋critic空で収束とする。
+- **上限（難度連動）**: 既定4ラウンド。ただし固定cap は難所を早期に切り上げて未収束を残す（パイロット2: 単一難所が7ラウンド要した）。**新規C/Hが毎ラウンド減り続けている間はcapを消費しない**（収束傾向なら上限を+2まで自動延長）。減らずに横ばい/発散したラウンドのみcapを1消費する。延長する場合はユーザーに一言明示（想定トークン増を含む）。到達前にリードが最大深度で最終再考を一度行う（ultrathink相当、SKILL.md規律参照）。それでも新規C/Hが残る場合は残存findingをユーザーに提示し受容判断を仰ぐ（ユーザーゲート「検収結果」/「残存リスク」）。
+- **completeness critic**: 問いは1つだけ固定: 「未カバーの次元・未検証の主張・未読ファイルは？」。何か出たら次ラウンドの種にする。
