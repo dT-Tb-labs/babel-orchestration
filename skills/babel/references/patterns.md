@@ -28,7 +28,7 @@ node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --cwd "<repo>" "Ta
 
 ### agy発射コマンド雛形
 
-agyはfs読み不可（protocol.md §1）→ spec.mdへのパス参照はせず、spec要点（goal/criteria/constraints）をプロンプトにインライン化する。python3.13＋heredoc環境変数方式（agy SKILL.md準拠、ダブルクォート事故回避）。ペイロードはdiffハンク相当のみに絞りサイズ上限を意識（超過時は要約して送る）。
+agyはfs読み不可（protocol.md §1）→ spec.mdへのパス参照はせず、spec要点（goal/criteria/constraints）をプロンプトにインライン化する。python3（stub環境ではpython3.13/py -3.13、SKILL.mdクルー表参照）＋heredoc環境変数方式（agy SKILL.md準拠、ダブルクォート事故回避）。ペイロードはdiffハンク相当のみに絞りサイズ上限を意識（超過時は要約して送る）。
 
 ```bash
 PROMPT=$(cat <<'EOF'
@@ -36,7 +36,7 @@ TaskPacket: {"goal":"independent design for <task概要>. Spec要点: <spec.md�
 Output DesignPacket JSON only, no prose. Do not use any tools — answer directly from the text given above.
 EOF
 )
-python3.13 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 180
+python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 180
 ```
 
 Bash側 `timeout: 200000` を併用（agy SKILL.md準拠）。
@@ -102,7 +102,7 @@ Diff hunk: <変更diffハンクをインライン貼付>
 Output one JSON array per line: ["<id>","<sev C|H|M|L>","<file>",<line>,"<claim>","<evidence 15-30tok>"]. Example: ["F1","C","auth.py",42,"token expiry unchecked","verify_token() decodes JWT without checking exp claim"]. Output NONE (single word) if clean. No prose. Do not use any tools — answer directly from the text given above.
 EOF
 )
-python3.13 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 240
+python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 240
 ```
 Bash `timeout: 300000` + `run_in_background: true`。changeset全体レビューは設計依頼より重いためagyタイムアウトを240/300000に延長（意図的）。
 

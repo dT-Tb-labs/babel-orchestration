@@ -117,3 +117,7 @@ only themselves to run.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+<sub>**Keywords:** Claude Code skill · multi-model / multi-agent AI orchestration · LLM ensemble · agentic dev workflow · automated code review & second opinion · design debate · build-debug loop · acceptance gate · Claude (Opus / Sonnet / Fable) + GPT-5.6-SOL (OpenAI Codex) + Gemini 3 (Google Antigravity `agy`) · superpowers pipeline · Sakana "Fugu" pattern.</sub>

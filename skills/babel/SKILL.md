@@ -17,7 +17,7 @@ superpowers の**拡張レイヤー**である。superpowers:brainstorming / sup
 | Opus（非リード時） | 最難関の検証/判定 | Agent tool model override |
 | Sonnet | 機械的実装・並列探索・一次スクリーニング | Agent tool / Workflow |
 | GPT-5.6-SOL | 独立設計案・Build&Debug相方・スタック時診断・検収レビュー | `node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs"`（tier: checkpoint=quick / 設計・検収=normal / 診断・重要検収=deep） |
-| agy (Gemini 3) | 第三意見レビュー・設計ディベート参加 | `python3.13 "$HOME/.claude/skills/agy/agy_pty_wrapper.py"` |
+| agy (Gemini 3) | 第三意見レビュー・設計ディベート参加 | `python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py"`（`python3` が本物のインタプリタを指さない環境＝Windows の WindowsApps stub 等では `python3.13` か `py -3.13` に置換。agy SKILL.md のトラブルシュート参照） |
 
 編成数(2/3/5体)=独立検収系統+専任役割の数。Sonnet機械的委譲（Phase 2実装・Phase 3一次スクリーニング含む）は全規模で可（コスト規律の委譲基準に従う）。リード=Opus選択時はFable枠をOpusが兼務し、Claude内検証はSonnet＋Opus別視点で構成する — L編成は実質4モデル＋役割分担になる旨をユーザーに明示する。
 
