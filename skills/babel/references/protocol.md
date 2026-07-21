@@ -31,7 +31,7 @@ agyの「diffハンクのみ」制限はファイル内容の転送形態に対�
 {goal:str, files:[{path,lines?}], inputs:[str], criteria:[str], constraints:[str], out_schema:str, canon?:[str]}
 例: {"goal":"review diff for spec drift","files":[{"path":"src/auth.py","lines":"40-80"}],"inputs":["design-sol.json"],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
 ```
-`inputs` = **アクセスリスト**（Fugu方式）。このワーカーが参照してよい先行成果物のパスを明示列挙する。列挙外の先行出力・会話履歴は渡さない（自動転送禁止の形式化。エージェント間隔離＝orchestration collapse防止）。
+`inputs` = **アクセスリスト**（明示アクセス方式）。このワーカーが参照してよい先行成果物のパスを明示列挙する。列挙外の先行出力・会話履歴は渡さない（自動転送禁止の形式化。エージェント間隔離＝orchestration collapse防止）。
 
 `canon` = **正典データチャネル**（複製/データ系タスクで必須。それ以外は省略可）。成果物が接地すべき一次資料の「読み方」を明示する — 生の値が取れる経路（PDFテキスト層・EDINET XBRL・元CSV・API生レスポンス等）を列挙し、劣化経路（画像OCRだけ・スクショ目視だけ・要約の又聞き）を禁止する。実タスクで観測したdefect根因＝「一次資料でなく画像読みだけで author させた」こと。TaskPacketに正典チャネルが無いと、ワーカーは手近な劣化経路で埋めて欠落を作る。
 例: `"canon":["PDFテキスト層(pdfplumber)で全数値を接地。画像/スクショからの読み取り値は禁止"]`
