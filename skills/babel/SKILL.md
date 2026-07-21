@@ -1,6 +1,6 @@
 ---
 name: babel
-description: Use when the user invokes /babel, or asks to orchestrate multiple models for a dev task ("多モデルで開発", "5モデルで", "複数AIでレビューさせて"). Orchestrates 5 models (Fable5/Opus/Sonnet/GPT-5.6-SOL/agy) across the superpowers pipeline (brainstorm→plan→implement→review), injecting multi-model debate/build-debug/acceptance-gate into each phase to exceed single-frontier-model quality (Sakana Fugu pattern). Not for JavaScript Babel transpiler tasks.
+description: Use when the user invokes /babel, or asks to orchestrate multiple models for a dev task ("多モデルで開発", "5モデルで", "複数AIでレビューさせて"). Orchestrates 5 models (Fable5/Opus/Sonnet/GPT-5.6-SOL/agy) across the superpowers pipeline (brainstorm→plan→implement→review), injecting multi-model debate/build-debug/acceptance-gate into each phase to exceed single-frontier-model quality (multi-model ensemble pattern). Not for JavaScript Babel transpiler tasks.
 ---
 
 # babel — 5モデル・オーケストレーション
@@ -64,7 +64,7 @@ superpowers スキルが導入されていない環境では、babelは各フェ
    - **S**: 2体（リード＋検収1系統）。設計ディベート省略。検収=**Claude敵対的レビュー1体**（外部依存を減らす。小diffでSOL quickはfalse positiveが出やすいため — 外部が既に立っていればSOL quickでも可）。
    - **M**: 3体（リード＋SOL＋agy）。検収1ラウンド。
    - **L**: 5体フル（Opus検証・Sonnetワーカー・検収ループ）。
-3. **提示と承認ゲート**: 編成案（S/M/L判定＋参加モデル＋適用パターン＋Sonnet委譲の有無・想定範囲）を自然言語でユーザーに提示し、承認を得てから開始する（ユーザーゲート「編成提示」）。**想定トークンを併記する**: 展開波（並列サブエージェント一斉発射）は容易に数百万トークン規模になる（パイロット2実測）ため、「1波あたり概算◯体×◯パターン=数百万トークン級」の桁感を編成提示に含め、消費同意を明確にする。ラウンド延長・deep上限超過など追加波を焚く局面でも都度、追加想定トークンを添えて確認する。承認後、`.babel/<task>/`（`<task>` はリードが付ける英数字ケバブケースslug、例: `add-pagination`）を初期化する（`spec.md` / `inbox/` / エージェント別結果ファイル`results/<agent>-r<N>.jsonl`規約 / `state.json` 初期値 `{"round":0,"rejected":[],"cursors":{},"budget":{"sol_calls":0,"sol_deep":0,"agy_calls":0},"channel_scoreboard":{}}` — 構造は `references/protocol.md` §5 ブラックボード参照。`channel_scoreboard` はL多ラウンドのオンライン適応（下記Fugu規律・`references/advanced.md` §A9）でのみ使い、初回接地時にチャネル別キーを起こす）。
+3. **提示と承認ゲート**: 編成案（S/M/L判定＋参加モデル＋適用パターン＋Sonnet委譲の有無・想定範囲）を自然言語でユーザーに提示し、承認を得てから開始する（ユーザーゲート「編成提示」）。**想定トークンを併記する**: 展開波（並列サブエージェント一斉発射）は容易に数百万トークン規模になる（パイロット2実測）ため、「1波あたり概算◯体×◯パターン=数百万トークン級」の桁感を編成提示に含め、消費同意を明確にする。ラウンド延長・deep上限超過など追加波を焚く局面でも都度、追加想定トークンを添えて確認する。承認後、`.babel/<task>/`（`<task>` はリードが付ける英数字ケバブケースslug、例: `add-pagination`）を初期化する（`spec.md` / `inbox/` / エージェント別結果ファイル`results/<agent>-r<N>.jsonl`規約 / `state.json` 初期値 `{"round":0,"rejected":[],"cursors":{},"budget":{"sol_calls":0,"sol_deep":0,"agy_calls":0},"channel_scoreboard":{}}` — 構造は `references/protocol.md` §5 ブラックボード参照。`channel_scoreboard` はL多ラウンドのオンライン適応（下記アンサンブル規律・`references/advanced.md` §A9）でのみ使い、初回接地時にチャネル別キーを起こす）。
 
 ## フェーズマップ
 
@@ -76,9 +76,9 @@ superpowers スキルが導入されていない環境では、babelは各フェ
 
 各パターンの発射コマンド雛形・チェックポイント手順・ループ終了条件は `references/patterns.md` の該当見出しを参照。ここでは繰り返さない。
 
-## Fugu由来の規律（常時遵守）
+## アンサンブル規律（常時遵守）
 
-Fugu の核となる規律は各所に実装済み。ここでは指す（再掲しない）:
+多モデル編成の核となる規律は各所に実装済み。ここでは指す（再掲しない）:
 - エージェント間隔離（inputsアクセスリスト）→ `protocol.md` §2。
 - 同ラウンド内レビュアー相互ブラインド → `protocol.md` §8。
 - アンカリング防止（自案完成まで外部を読まない）→ `patterns.md` #debate-aggregation。
