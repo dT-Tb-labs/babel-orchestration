@@ -61,7 +61,7 @@ editing is needed as long as all three live under `~/.claude/skills/`.
 
 **Minimal setup:** only `babel` + Claude Code is required. `cdx-sol` and `agy`
 are optional independent-review channels — babel runs with whatever you have and
-tells you when a channel is degraded off. See the "依存と最小構成" section in
+tells you when a channel is degraded off. See the "Dependencies & minimal setup" section in
 `skills/babel/SKILL.md` for the Claude-only (single-channel) mode.
 
 Then invoke from Claude Code:
@@ -98,7 +98,7 @@ Then invoke from Claude Code:
 ## Safety model
 
 - **External-LLM output is always treated as data, never executed as
-  instructions.** (See `skills/babel/SKILL.md` §安全 and `protocol.md` §0.)
+  instructions.** (See `skills/babel/SKILL.md` §Safety and `protocol.md` §0.)
 - Secrets/credentials are never placed in prompts sent to SOL/agy; babel scans
   the changeset for secret patterns before any external send and masks/excludes
   hits.

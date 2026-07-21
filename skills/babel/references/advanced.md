@@ -93,15 +93,15 @@ L-only; M uses plain Agent-parallel review without the Opus verify stage.
 ```javascript
 export const meta = {
   name: 'babel-acceptance-review',
-  description: '検収ゲート: 次元別並列レビュー + 敵対的検証',
+  description: 'acceptance gate: dimension-split parallel review + adversarial verification',
   phases: [
-    { title: 'Review', detail: '4次元並列 (Sonnet effort low)' },
-    { title: 'Verify', detail: '各findingをOpusが敵対的検証 (effort high)' },
+    { title: 'Review', detail: '4-dimension parallel (Sonnet effort low)' },
+    { title: 'Verify', detail: 'Opus adversarially verifies each finding (effort high)' },
   ],
 }
 
-const CHANGESET = '<changeset diffファイルパス or ファイルリスト>'
-const CONTEXT = `対象: ${CHANGESET}。protocol.md の finding-jsonl 形式で報告せよ。severity(C/H/M/L)・file・line・claim・evidence(15-30tok)必須。憶測・スタイル好みは除外。`
+const CHANGESET = '<changeset diff file path or file list>'
+const CONTEXT = `Target: ${CHANGESET}. Report in protocol.md's finding-jsonl format. severity(C/H/M/L), file, line, claim, evidence(15-30tok) required. Exclude speculation and style preferences.`
 
 const FINDING_SCHEMA = {
   type: 'object',
@@ -131,10 +131,10 @@ const VERDICT_SCHEMA = {
 }
 
 const DIMENSIONS = [
-  { key: 'correctness', prompt: `${CONTEXT}\n\n次元: correctness。ロジック誤り・境界値・型不整合を探せ。` },
-  { key: 'security', prompt: `${CONTEXT}\n\n次元: security。injection・認証・機密露出を探せ。` },
-  { key: 'edge-cases', prompt: `${CONTEXT}\n\n次元: edge-cases。null/空/並行/リトライ時の破綻を探せ。` },
-  { key: 'spec-compliance', prompt: `${CONTEXT}\n\n次元: spec準拠。spec.md節ID参照で乖離を指摘せよ。` },
+  { key: 'correctness', prompt: `${CONTEXT}\n\ndimension: correctness. Hunt for logic errors, boundary values, type mismatches.` },
+  { key: 'security', prompt: `${CONTEXT}\n\ndimension: security. Hunt for injection, authentication, secret exposure.` },
+  { key: 'edge-cases', prompt: `${CONTEXT}\n\ndimension: edge-cases. Hunt for breakage under null/empty/concurrency/retry.` },
+  { key: 'spec-compliance', prompt: `${CONTEXT}\n\ndimension: spec compliance. Point out divergences with spec.md section-ID references.` },
 ]
 
 phase('Review')
@@ -144,7 +144,7 @@ const results = await pipeline(
   (res, d) => {
     if (!res || !res.findings.length) return []
     return parallel(res.findings.map(f => () =>
-      agent(`${CONTEXT}\n\n敵対的検証。反証するつもりでコードを読み、実際に成立するか判定せよ。\n所見(${d.key}): [${f.severity}] ${f.file}:${f.line} ${f.claim}\n根拠: ${f.evidence}`, {
+      agent(`${CONTEXT}\n\nAdversarial verification. Read the code intending to refute it, and judge whether it actually holds.\nFinding(${d.key}): [${f.severity}] ${f.file}:${f.line} ${f.claim}\nEvidence: ${f.evidence}`, {
         label: `verify:${d.key}:${f.file}:${f.line}`, phase: 'Verify', schema: VERDICT_SCHEMA, model: 'opus', effort: 'high',
       }).then(v => ({ ...f, dimension: d.key, verdict: v }))
     ))
@@ -152,14 +152,14 @@ const results = await pipeline(
 )
 const all = results.filter(Boolean).flat().filter(Boolean)
 const confirmed = all.filter(f => f.verdict && f.verdict.real)
-log(`所見 ${all.length} 件中 ${confirmed.length} 件が検証を通過`)
+log(`${confirmed.length} of ${all.length} findings passed verification`)
 return { confirmed, rejectedCount: all.length - confirmed.length }
 ```
-Workflow内のschema出力はリードがマージ時に finding-jsonl＋グローバルID へ正規化する。Workflowツールが無い環境は次元別レビューをAgent並列で代替。
+The lead normalizes the Workflow's schema output into finding-jsonl + global ID at merge time. In environments without the Workflow tool, substitute Agent-parallel review for the dimension-split review.
 
 ## A7. Cost-tier details
 
-- SOL tier: checkpoint=quick / design・acceptance=normal / stuck-diagnosis・critical-acceptance=deep.
+- SOL tier: checkpoint=quick / design/acceptance=normal / stuck-diagnosis/critical-acceptance=deep.
   "critical acceptance" = L **and** security/irreversible task's acceptance SOL only.
 - **deep cap = 2 per task** (ask the user past that).
 
@@ -173,19 +173,19 @@ Low-stakes efficiency rules; ignore unless they bite.
 - Instruction re-send: Claude subagents get a protocol pointer + stable prefix (prompt-cache hit); SOL gets the inline spec each time (re-reading saves nothing).
 - Input-echo ban: findings cite `file:line`, not quoted hunks (unless the quote is the evidence).
 
-## A9. タスク内チャネル適応（オンライン・L多ラウンド専用）
+## A9. Within-task channel adaptation (online, L multi-round only)
 
-1タスクの実行中に、チャネル編成をライブで自律調整する。**人間ゲート不要の全自律** — ただし**エフェメラル**（学習はタスク終了で破棄。`channel_scoreboard` は `.babel/<task>/` と同寿命）だから安全に自律化できる。これがオフラインの規約進化（永続・人間承認必須）と決定的に違う点: タスク跨ぎの永続化を殺せば、危険な失敗モード（自己参照ロック・N=1過学習・外部出力の恒久インジェクション）が原理的に消え、自律性だけが残る。**両者を混ぜない** — scoreboardをSKILL.md/protocol.mdへ書き戻さない。
+During the execution of a single task, autonomously adjust the channel crew composition live. **Fully autonomous, no human gate needed** — but because it is **ephemeral** (learning is discarded at task end; `channel_scoreboard` shares the same lifetime as `.babel/<task>/`), it can be made autonomous safely. This is the decisive difference from offline convention evolution (persistent, human approval mandatory): if you kill cross-task persistence, the dangerous failure modes (self-reference lock, N=1 overfitting, permanent injection of external output) disappear in principle, and only the autonomy remains. **Do not mix the two** — do not write the scoreboard back into SKILL.md/protocol.md.
 
-**発火条件**: **L かつ 多ラウンド**（3ラウンド以上回る見込み）のみ。S/Mは数ラウンドで終わり学習が立ち上がる前にタスクが尽きる → 固定編成のまま調整しない（バンディットはノイズになる）。
+**Firing condition**: **L and multi-round** (expected to run 3 or more rounds) only. S/M finish in a few rounds and the task runs out before learning ramps up → keep the fixed crew composition without adjusting (the bandit becomes noise).
 
-**駆動信号は接地アウトカムのみ**: `state.json.channel_scoreboard`（protocol.md §5）の `confirmed`/`refuted` だけで判断する。**リード/LLMの主観評価（「このチャネルが良さそう」）では絶対に駆動しない** — protocol.md §7 の不変条件。`confirmed`/`refuted` はどちらも実コード/一次資料に接地したラベルであって意見ではない。
+**The only driving signal is grounded outcomes**: judge solely by `confirmed`/`refuted` in `state.json.channel_scoreboard` (protocol.md §5). **Never drive by the lead's/LLM's subjective evaluation ("this channel seems good")** — the invariant of protocol.md §7. Both `confirmed` and `refuted` are labels grounded in real code / primary sources, not opinions.
 
-**調整規則（多腕バンディット、報酬 = confirmed/token）**: 各ラウンドのマージ後、scoreboardを読んで次ラウンド編成を決める。序盤=探索（全チャネル発射）、終盤=活用。
-- **ドロップ**: あるチャネルが直近2ラウンドで `confirmed=0` かつ `refuted≥2` → 次ラウンドから外す。偽陽性しか出さないチャネルにトークンを払わない。ドロップは当該タスク内のみ（次タスクで全チャネル復活）。
-- **活用（ルーティング偏重）**: 特定欠陥クラスの `confirmed` があるチャネルに偏るなら、変更影響ルーティング（protocol.md §9）の再実行先をそのチャネル優先にする。
-- **伸縮**: 収束トレンド（patterns.md 終了条件）と併読 — 新規C/Hが減り続け全チャネルが `refuted` 偏りなら早期収束と見て編成を畳む。逆に高 `confirmed` が続くうちは難度連動capを消費せず伸長する。
+**Adjustment rule (multi-armed bandit, reward = confirmed/token)**: after each round's merge, read the scoreboard to decide the next round's crew composition. Early = exploration (fire all channels), late = exploitation.
+- **Drop**: a channel with `confirmed=0` and `refuted≥2` over the last 2 rounds → remove it from the next round. Do not pay tokens to a channel that produces only false positives. The drop applies within the current task only (all channels revive on the next task).
+- **Exploitation (routing bias)**: if `confirmed` for a specific defect class concentrates in one channel, make that channel the priority re-run target of change-impact routing (protocol.md §9).
+- **Stretch/shrink**: read together with the convergence trend (patterns.md termination condition) — if new C/H keeps declining and all channels skew toward `refuted`, treat it as early convergence and fold the crew composition. Conversely, while high `confirmed` continues, extend without consuming the difficulty-linked cap.
 
-**接地コスト規律**: 接地はタダではない（リードのコンテキスト＋トークン）。全find全チャネルを毎ラウンド接地しない — protocol.md §7「調停は相違分のみ」の延長で、相違した/単独系統のfindingにだけ接地をかけ結果をscoreboardへ記録。合意済み（複数系統一致）は `confirmed` 扱い。
+**Grounding-cost discipline**: grounding is not free (the lead's context + tokens). Do not ground every find on every channel each round — as an extension of protocol.md §7 "arbitrate only the differences," apply grounding only to findings that differ or are single-lineage, and record the result to the scoreboard. Agreed findings (multiple lineages concur) are treated as `confirmed`.
 
-**アンサンブル価値の観測（副産物）**: scoreboardは「どのチャネルが接地確認findingを稼いだか」を無料で記録する。あるタスクで `confirmed` がほぼ単一チャネル（例: Claude内省）からしか出ていなければ、**そのタスクに関する限り**他チャネルはトークンを稼げなかったという直接証拠になる（観測によるアブレーション）。これは単発タスクの記述であって規約変更の根拠にはしない — 複数タスク横断のオフライン分析＋人間ゲートを経て初めて編成表の改定に使う。
+**Observing ensemble value (byproduct)**: the scoreboard records for free "which channel earned grounding-confirmed findings." If, on some task, `confirmed` comes almost entirely from a single channel (e.g. Claude introspection), that is direct evidence that — **as far as that task is concerned** — the other channels could not earn their tokens (ablation by observation). This is a description of a single task and is not grounds for a convention change — it is used to revise the crew-composition table only after cross-task offline analysis + a human gate.

@@ -1,123 +1,123 @@
-# babel フェーズ別プレイブック
+# babel Per-Phase Playbook
 
-読者: babelを実行中のリードLLM。各節はSKILL.mdの各フェーズから参照される実行可能手順。通信規則・パケット形式・エラー処理は本ファイルでは再掲しない → **protocol.md 参照**。ここは「いつ・誰に・何を・どの順で投げるか」のみを扱う。
+Audience: the lead LLM running babel. Each section is an executable procedure referenced from the corresponding phase in SKILL.md. Communication rules, packet formats, and error handling are not restated here → **see protocol.md**. This file covers only "when, to whom, what, and in what order to dispatch."
 
 ---
 
 ## debate-aggregation
 
-Phase 1（設計）で使う。トリアージでM/Lと判定された場合のみ実施。Sは省略しリード単独設計。
+Used in Phase 1 (design). Run only when triage classifies the task as M/L. For S, skip and let the lead design alone.
 
-0. **正典データチャネルの確定**（複製/データ系タスクのみ、設計より先）: 成果物が接地すべき一次資料と「劣化しない読み方」をこの段で決め、TaskPacketの `canon` 欄（protocol.md §2）に載せる。これを設計後・検収後に後付けすると、実装ワーカーが手近な劣化経路（画像OCRだけ・スクショ目視だけ）で埋めて欠落を作る（実タスクで観測したdefect根因）。以降の全実装/修理TaskPacketに `canon` を継承させる。データ系でないタスクはこのステップを飛ばす。
-1. **並列発射**: superpowers:brainstorming でユーザー質疑を終えたら、リードが自案を書き始める**前に** SOL+agy へ同一のDesignPacket要求（TaskPacket, out_schema=DesignPacket。protocol.md §2）を `run_in_background` で同時発射する。
-2. **アンカリング防止バリア**: リードは外部の応答を読まずに自案（DesignPacket相当）を書き切る。順序はコードでなく手順で保証する — 外部呼び出しの出力を待つ・確認するアクションは自案完成後に置く。
-3. **L時のみ**: Claude内でも視点別（MVP-first / risk-first / user-first）の独立設計をWorkflowツールの `parallel()` でSonnet/Opus混成生成する（見取り図は acceptance-gate の雛形と同じ `agent()` API、schemaはDesignPacket形式）。
-4. **統合**: 全案（自案＋SOL＋agy＋Claude内視点）を合意点マトリクス＋相違点にまとめる。
-5. **相違の解消**: 系統間の相違はまずリードが接地（一次資料/実コード）で埋める。ドメイン最強モデルへの動的調停委任（algorithmic→SOL / API仕様→agy、相違点のみ送付）は `advanced.md` §A4。埋まらなければリードが最大深度で最終再考（SKILL.md「詰まったら最大深度思考」）→ なおダメならユーザーゲート「設計相違点」。
+0. **Fix the canonical data channel** (data/replication tasks only, before design): decide at this stage the primary sources the deliverable must ground on and the "non-degrading way to read them," and record them in the `canon` field of the TaskPacket (protocol.md §2). Retrofitting this after design or after acceptance leads the implementation worker to fill it via a convenient degraded path (image OCR only, eyeballing a screenshot only), creating gaps (a defect root cause observed on a real task). Propagate `canon` into every subsequent implementation/repair TaskPacket. Non-data tasks skip this step.
+1. **Parallel launch**: once user Q&A via superpowers:brainstorming is done, **before** the lead starts writing its own proposal, dispatch the identical DesignPacket request (TaskPacket, out_schema=DesignPacket; protocol.md §2) to SOL+agy simultaneously via `run_in_background`.
+2. **Anchoring-avoidance barrier**: the lead writes its own proposal (equivalent to a DesignPacket) to completion without reading the external responses. Ordering is guaranteed by procedure, not by code — place the actions that wait for or check the external calls' output after the lead's own proposal is complete.
+3. **L only**: within Claude, generate independent per-viewpoint designs (MVP-first / risk-first / user-first) as a mixed Sonnet/Opus generation via the Workflow tool's `parallel()` (the blueprint uses the same `agent()` API as the acceptance-gate template; schema is DesignPacket format).
+4. **Integration**: consolidate all proposals (own + SOL + agy + Claude-internal viewpoints) into an agreement matrix plus points of difference.
+5. **Resolving differences**: the lead first fills cross-system differences with grounding (primary sources / actual code). Dynamic arbitration delegation to the domain-strongest model (algorithmic→SOL / API spec→agy, sending only the points of difference) is in `advanced.md` §A4. If they cannot be filled, the lead does a final reconsideration at maximum depth (SKILL.md "think at maximum depth when stuck") → if that still fails, user gate "design differences."
 
-### SOL発射コマンド雛形
+### SOL launch command template
 
-ペイロードは `.babel/<task>/inbox/design-req.json` に書き、SOLには `--cwd` 経由で自己読みさせる（protocol.md §3、argv上限回避）。SOLにはprotocol.mdポインタを使わず、出力形式を都度インラインで埋め込む（protocol.md §11）。
+Write the payload to `.babel/<task>/inbox/design-req.json` and have SOL read it itself via `--cwd` (protocol.md §3, to avoid the argv limit). Do not use protocol.md pointers with SOL; embed the output format inline each time (protocol.md §11).
 
 ```bash
 node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON."
 ```
 
-- `--tier normal`（設計は normal、診断/重要検収は deep）。
-- Bash `timeout: 600000`（cdx-sol SKILL.md必須。デフォルト120sでは長時間実行が殺される）＋ `run_in_background: true`。完了通知はagyと合わせて待ち合わせる。
+- `--tier normal` (normal for design, deep for diagnosis/critical acceptance).
+- Bash `timeout: 600000` (required per cdx-sol SKILL.md; the default 120s kills long-running executions) plus `run_in_background: true`. Wait for the completion notification together with agy's.
 
-### agy発射コマンド雛形
+### agy launch command template
 
-agyはfs読み不可（protocol.md §1）→ spec.mdへのパス参照はせず、spec要点（goal/criteria/constraints）をプロンプトにインライン化する。python3（stub環境ではpython3.13/py -3.13、SKILL.mdクルー表参照）＋heredoc環境変数方式（agy SKILL.md準拠、ダブルクォート事故回避）。ペイロードはdiffハンク相当のみに絞りサイズ上限を意識（超過時は要約して送る）。
+agy cannot read the fs (protocol.md §1) → do not reference a path to spec.md; inline the spec essentials (goal/criteria/constraints) into the prompt. Use python3 (in the stub environment python3.13/py -3.13, see the SKILL.md crew table) plus the heredoc environment-variable approach (per agy SKILL.md, to avoid double-quote accidents). Keep the payload to the diff-hunk equivalent only and be mindful of the size limit (summarize before sending when it exceeds).
 
 ```bash
 PROMPT=$(cat <<'EOF'
-TaskPacket: {"goal":"independent design for <task概要>. Spec要点: <spec.mdのgoal/criteria/constraintsを要約してここにインライン>","files":[],"inputs":[],"criteria":["<受入基準>"],"constraints":["<制約>"],"out_schema":"DesignPacket"}
+TaskPacket: {"goal":"independent design for <task summary>. Spec essentials: <summarize spec.md's goal/criteria/constraints inline here>","files":[],"inputs":[],"criteria":["<acceptance criteria>"],"constraints":["<constraints>"],"out_schema":"DesignPacket"}
 Output DesignPacket JSON only, no prose. Do not use any tools — answer directly from the text given above.
 EOF
 )
 python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 180
 ```
 
-Bash側 `timeout: 200000` を併用（agy SKILL.md準拠）。
+Use Bash-side `timeout: 200000` alongside (per agy SKILL.md).
 
 ---
 
 ## build-debug
 
-Phase 2（実装）で使う。superpowers:executing-plans / subagent-driven-development に接続する。babel固有の追加はチェックポイント検証とモデル割当のみ。
+Used in Phase 2 (implementation). Connects to superpowers:executing-plans / subagent-driven-development. The only babel-specific additions are checkpoint verification and model assignment.
 
-1. タスク分解後、機械的タスク（定型実装・置換・雛形埋め）は Sonnet サブエージェントへ委譲、中核ロジック（設計判断が要るコア実装）はリードが書く。
-2. **カスケード**: Sonnetが一次ドラフト/スクリーニングを行い、通過分のみ上位モデル（リード/Opus）が精査する。全件を上位モデルに通さない。
-3. **チェックポイント検証（任意）**: マイルストーン毎に SOL quick で spec-drift/bug チェック。**省略条件**: マイルストーンdiffがタスク最終changeset全体と一致する小タスクは省略し Phase 3検収に統合（二重発射回避）。機構・発射雛形は `advanced.md` §A3。
-4. findingは finding-jsonl（protocol.md §2）で受理・schema検証ゲート（§7）。C/Hは即修正してから次へ、M/Lは記録し acceptance-gate で拾う。
+1. After task decomposition, delegate mechanical tasks (boilerplate implementation, replacements, template filling) to Sonnet subagents; the lead writes the core logic (core implementation requiring design judgment).
+2. **Cascade**: Sonnet does the first-pass draft/screening, and only what passes is scrutinized by a higher model (lead/Opus). Do not route everything through the higher model.
+3. **Checkpoint verification (optional)**: at each milestone, run a spec-drift/bug check with SOL quick. **Skip condition**: for small tasks where the milestone diff coincides with the task's final changeset as a whole, skip and fold into Phase 3 acceptance (avoiding double dispatch). Mechanism and launch template are in `advanced.md` §A3.
+4. Findings are received as finding-jsonl (protocol.md §2) with the schema-verification gate (§7). Fix C/H immediately before moving on; record M/L and pick them up at acceptance-gate.
 
-**スタック時**（同一ファイル/シンボルで修正2回連続失敗）は `#sequential-switching` = `advanced.md` §A2（SOL deep→agy→リード最大深度→ユーザー）へ。
+**When stuck** (two consecutive failed fixes on the same file/symbol), go to `#sequential-switching` = `advanced.md` §A2 (SOL deep→agy→lead maximum depth→user).
 
 ---
 
 ## sequential-switching
 
-Phase 2スタック時（同一問題で修正2回連続失敗）の診断交代プレイブック → `advanced.md` §A2。
+The diagnosis-handoff playbook for when stuck in Phase 2 (two consecutive failed fixes on the same problem) → `advanced.md` §A2.
 
 ---
 
 ## acceptance-gate
 
-Phase 3（検収）で使う。規模別の適用: **S=Claude敵対的レビュー1体のみ**（(a)を1体で実行、本節の残りは省略。外部が既に立っていればSOL quick可だが、小diffではSOL false positiveが出やすいのでClaude敵対を既定とする）。M=1ラウンド: 3系統レビュー(a)(b)(c)+リードのマージ・C/H修正まで。ステップ5の再実行ループ・収束判定・completeness criticはL専用。Mで修正後の確認は変更影響レビュアー1回のみ（修正diffと交差するスコープを持つ系統のうち元findingを報告した系統1つのみ再実行。複数該当時はSOL優先）。L=本節フル。編成はSKILL.md Phase 0参照。
+Used in Phase 3 (acceptance). Applied by scale: **S = Claude adversarial review, 1 reviewer only** (run (a) with a single reviewer; skip the rest of this section. If an external reviewer is already up, SOL quick is fine, but small diffs are prone to SOL false positives, so Claude adversarial is the default). M = 1 round: 3-system review (a)(b)(c) plus the lead's merge and C/H fixes. The re-run loop, convergence check, and completeness critic in step 5 are L-only. For M, post-fix confirmation is a single change-impact reviewer only (re-run only one system among those whose scope intersects the fix diff and that reported the original finding; when multiple qualify, prefer SOL). L = full section. See SKILL.md Phase 0 for crew composition.
 
-**レビュー対象 = Phase 3開始時点の実changeset**（実際に編集したファイル一覧を `git diff --name-only` 等で確定する）。Phase 0トリアージ時に見積もったファイルリストではない — 実装中にスコープ外の共有モジュールを触っていれば、それも含める（agy査読#8）。
+**Review target = the actual changeset at the start of Phase 3** (fix the list of actually-edited files via `git diff --name-only` etc.). Not the file list estimated during Phase 0 triage — if a shared module out of scope was touched during implementation, include it too (agy review #8).
 
-**CHANGESETの実体**: Phase 3開始時、リードが `.babel/<task>/inbox/changeset.diff`（unified diff）＋変更ファイル一覧を作成する。fs読み可能なレビュアー（SOL/Claudeサブエージェント）はパスで受領し、agyはハンクをインラインで受け取る。spec準拠レビューは `.babel/<task>/spec.md` を同様に配布する（agyには要点をインライン化）。
+**The substance of the CHANGESET**: at the start of Phase 3, the lead creates `.babel/<task>/inbox/changeset.diff` (unified diff) plus a list of changed files. Reviewers that can read the fs (SOL / Claude subagents) receive it by path, and agy receives the hunks inline. For spec-compliance review, distribute `.babel/<task>/spec.md` the same way (inline the essentials for agy).
 
-### 手順
+### Procedure
 
-1. changesetを確定し、3系統を発射する。
-   - (a) Claude敵対的Workflow: リードがその場でWorkflowスクリプトを動的生成・実行（雛形は下記）。(a)のWorkflow敵対的検証はL専用。MではリードがAgent並列で簡略レビューし、Opus判定stageは使わない。**体数はdiffサイズ連動**（目安、行数はchangeset全体）: 50行未満=1体（全次元を1体でカバー）／50-200行=2体／200行超=3体（次元分割）。パイロット1実測: 44行diffに3体は過剰、1体に縮約。
-   - (b) agy: changesetのdiffハンクをインラインでレビュー依頼。
-   - (c) SOL normal: `.babel/<task>/inbox/` 経由でchangesetパスを渡しレビュー依頼。
-   - (b)(c)は `run_in_background` で同時発射。(a)はリードのセッション内で実行。
-2. **同ラウンド内レビュアー相互ブラインド**: (a)(b)(c)は互いのfindingを同ラウンド内で受け取らない。マージ・相互参照はリードのみが行う（protocol.md §8）。
-3. 全系統のfindingが揃ったらリードがマージする（下記マージ手順）。
-4. 系統間の相違はリードが接地で埋める（動的調停は `advanced.md` §A4）。
-5. 収束条件を評価し、未収束なら該当レビュアーのみ再発射（変更影響ルーティング、protocol.md §9）。
+1. Fix the changeset and dispatch the 3 systems.
+   - (a) Claude adversarial Workflow: the lead dynamically generates and runs a Workflow script on the spot (template below). The (a) Workflow adversarial verification is L-only. For M, the lead runs a simplified review with parallel Agents and does not use the Opus adjudication stage. **Reviewer count scales with diff size** (guideline; line counts are for the whole changeset): under 50 lines = 1 reviewer (one reviewer covers all dimensions) / 50–200 lines = 2 reviewers / over 200 lines = 3 reviewers (dimension split). Pilot 1 measurement: 3 reviewers for a 44-line diff was excessive, reduced to 1.
+   - (b) agy: request review of the changeset's diff hunks inline.
+   - (c) SOL normal: pass the changeset path via `.babel/<task>/inbox/` and request review.
+   - (b)(c) are dispatched simultaneously via `run_in_background`. (a) runs inside the lead's session.
+2. **Mutually blind reviewers within a round**: (a)(b)(c) do not receive each other's findings within the same round. Only the lead merges and cross-references (protocol.md §8).
+3. Once all systems' findings are in, the lead merges (merge procedure below).
+4. The lead fills cross-system differences with grounding (dynamic arbitration in `advanced.md` §A4).
+5. Evaluate the convergence condition; if not converged, re-dispatch only the relevant reviewers (change-impact routing, protocol.md §9).
 
-### (a) Claude敵対的Workflow 雛形
+### (a) Claude adversarial Workflow template
 
-次元別（correctness / security / edge-cases / spec準拠）を `pipeline()` で並列生成 → 各findingを敵対的検証（Sonnet一次生成 → Opus生死判定）。**(a)のWorkflow全文雛形（JS）は `advanced.md` §A6**。(a)のWorkflow敵対的検証はL専用。**MではリードがAgent並列で簡略レビュー**（Opus判定stageは使わない）。Workflowツールが無い環境も次元別レビューをAgent並列で代替。
+Generate per-dimension (correctness / security / edge-cases / spec-compliance) in parallel via `pipeline()` → adversarially verify each finding (Sonnet first-pass generation → Opus live/dead adjudication). **The full (a) Workflow template (JS) is in `advanced.md` §A6.** The (a) Workflow adversarial verification is L-only. **For M, the lead runs a simplified review with parallel Agents** (does not use the Opus adjudication stage). In environments without the Workflow tool, substitute per-dimension review with parallel Agents.
 
-### (b)(c) 雛形
+### (b)(c) template
 
-(c) SOL: build-debugのチェックポイント雛形を流用し goalを検収用に変更。
+(c) SOL: reuse the build-debug checkpoint template and change the goal to acceptance.
 ```bash
-node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --cwd "<repo>" "TaskPacket: goal='full review of changeset', files=[{path:'<changesetファイルリストパス>'}], out_schema='finding-jsonl or NONE'. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence 15-30tok>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
+node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --cwd "<repo>" "TaskPacket: goal='full review of changeset', files=[{path:'<path to changeset file list>'}], out_schema='finding-jsonl or NONE'. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence 15-30tok>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
 ```
-Bash `timeout: 600000` + `run_in_background: true`。L かつ セキュリティ/不可逆該当タスクの重要検収は `--tier deep` に差し替える（SKILL.mdコスト規律参照）。
+Bash `timeout: 600000` + `run_in_background: true`. For critical acceptance of an L task that is security/irreversible, swap in `--tier deep` (see the cost discipline in SKILL.md).
 
-(b) agy: PTY wrapper。changesetのdiffハンクをインラインで渡し、finding-jsonl形式行＋例1行をプロンプト内に含める（SOL同様インライン）。ペイロードはサイズ上限を意識し、超過時は分割または縮退する（設計雛形と同基準、protocol.md §3）。
+(b) agy: PTY wrapper. Pass the changeset's diff hunks inline, and include the finding-jsonl format line plus one example line inside the prompt (inline, like SOL). Be mindful of the payload size limit; when it exceeds, split or degrade (same criteria as the design template, protocol.md §3).
 ```bash
 PROMPT=$(cat <<'EOF'
-TaskPacket: {"goal":"full review of changeset","files":[{"path":"<diffハンク要約>"}],"inputs":[],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
-Diff hunk: <変更diffハンクをインライン貼付>
+TaskPacket: {"goal":"full review of changeset","files":[{"path":"<diff hunk summary>"}],"inputs":[],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
+Diff hunk: <paste the changed diff hunks inline>
 Output one JSON array per line: ["<id>","<sev C|H|M|L>","<file>",<line>,"<claim>","<evidence 15-30tok>"]. Example: ["F1","C","auth.py",42,"token expiry unchecked","verify_token() decodes JWT without checking exp claim"]. Output NONE (single word) if clean. No prose. Do not use any tools — answer directly from the text given above.
 EOF
 )
 python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 240
 ```
-Bash `timeout: 300000` + `run_in_background: true`。changeset全体レビューは設計依頼より重いためagyタイムアウトを240/300000に延長（意図的）。
+Bash `timeout: 300000` + `run_in_background: true`. A whole-changeset review is heavier than a design request, so agy's timeout is extended to 240/300000 (intentional).
 
-### マージ手順
+### Merge procedure
 
-1. **指紋dedup**: `{path, シンボル（関数名/spec節ID）, 違反不変条件}` で照合。行番号はdedupキーに使わない（protocol.md §7）。照合はリードによる意味比較。
-2. 既出リスト＋棄却済みリスト**両方**に対して照合する（再浮上ループ防止）。
-3. C/Hのみ検証: 生存finding 8-12件/1呼びでバッチ化。repro実行可能なら再現コマンド/失敗テストで検証、不能なら不変条件論証で代替（protocol.md §7、repro安全規則も同節）。
-   **小diffでのSOL findingは要接地確認**: changesetが小さい（目安50行未満）ほどSOL検収findingはfalse positive率が上がる（パイロット1実測: 実在しないtrailing whitespace指摘）。SOL単独findingかつ小diffの場合、検証段階で該当ファイルの実際の行を必ず確認してから採用する（他系統と一致するfindingは優先度を上げてよい）。S検収（SOL quick 1回のみ）でも同様に適用する。
-4. 検証通過分を修正する。**修理前の再接地義務**: 監査findingをそのまま信じて修正しない。fixに着手する前に、該当箇所を一次資料（`canon` チャネル・実ファイルの当該行）で再確認し、findingの前提が実際に成立するか検証する。監査は誤検出しうる（パイロット2: R4系統が自発的に再接地して誤検出2件を防いだ）。修理TaskPacketには `constraints` に「fix前に canon で再接地し、finding前提を確認せよ」を必ず入れる。
-5. **変更影響ルーティング**で再実行: 修正したファイル/関数が前回スコープまたは未解決findingと交差するレビュアーのみ再発射する（無関係レビュアーへの再送はしない）。**L多ラウンドではさらに `channel_scoreboard`（protocol.md §5）で編成を絞る** — 直近2ラウンドで接地confirmed=0かつrefuted≥2のチャネルは次ラウンドから外す（タスク内オンライン適応、詳細 `advanced.md` §A9）。各findingの接地結果（confirmed/refuted）はこのマージ段でscoreboardへ追記する（リード専任）。
-6. M/LはC/Hと同様に行出力させておくが検証・修正はしない。最終報告でまとめてユーザー提示。
+1. **Fingerprint dedup**: match on `{path, symbol (function name / spec section ID), violated invariant}`. Do not use line numbers in the dedup key (protocol.md §7). Matching is a semantic comparison by the lead.
+2. Match against **both** the already-reported list and the already-rejected list (to prevent re-surfacing loops).
+3. Verify C/H only: batch 8–12 surviving findings per call. If a repro can be run, verify with the reproduction command / failing test; if not possible, substitute an invariant argument (protocol.md §7; the repro safety rules are in the same section).
+   **SOL findings on small diffs need grounding confirmation**: the smaller the changeset (guideline: under 50 lines), the higher SOL's acceptance false-positive rate (pilot 1 measurement: flagged trailing whitespace that did not exist). For an SOL-only finding on a small diff, always confirm the actual lines of the file in question during the verification stage before adopting it (a finding that agrees with another system may have its priority raised). Apply the same to S acceptance (SOL quick, single pass).
+4. Fix what passes verification. **Obligation to re-ground before repair**: do not fix by trusting an audit finding as-is. Before starting a fix, re-confirm the location against primary sources (`canon` channel / the actual line of the real file) and verify whether the finding's premise actually holds. Audits can produce false detections (pilot 2: the R4 system spontaneously re-grounded and prevented 2 false detections). The repair TaskPacket must always include in `constraints`: "before fixing, re-ground against canon and confirm the finding's premise."
+5. Re-run with **change-impact routing**: re-dispatch only the reviewers whose previous scope or unresolved findings intersect the fixed file/function (do not re-send to unrelated reviewers). **For L multi-round, further narrow crew composition with `channel_scoreboard`** (protocol.md §5) — drop from the next round any channel with grounding confirmed=0 and refuted≥2 over the last 2 rounds (within-task online adaptation, details in `advanced.md` §A9). Each finding's grounding outcome (confirmed/refuted) is appended to the scoreboard at this merge stage (lead exclusively).
+6. Have M/L output in line form the same as C/H, but do not verify or fix them. Present them together to the user in the final report.
 
-### 終了条件
+### Termination condition
 
-- **収束**: あるラウンドで新規C/Hゼロ、かつ直後の completeness critic（L専用、`advanced.md` §A5）も空。ラウンド1でクリーンなら即収束。修正が発生した場合のみ該当系統を再実行し、修正後ラウンドが新規C/Hゼロで収束。
-- **上限（難度連動）**: 既定4ラウンド。**新規C/Hが毎ラウンド減り続けている間はcapを消費しない**（収束傾向なら+2まで自動延長、パイロット2の単一難所は7ラウンド要）。横ばい/発散ラウンドのみcapを1消費。延長時はユーザーに一言明示（想定トークン増含む）。cap到達前にリードが最大深度で最終再考を一度行う。なお新規C/Hが残れば残存findingをユーザー提示（ユーザーゲート「検収結果」/「残存リスク」）。
-- **L多ラウンドの編成伸縮**: 上記の収束/延長判定は `channel_scoreboard` の接地アウトカムと併読する — チャネルのドロップ・ルーティング偏重・早期畳みはscoreboard駆動（`advanced.md` §A9）。接地アウトカムのみで駆動し主観評価では駆動しない（protocol.md §7 不変条件）。scoreboardはエフェメラルでタスク終了時に破棄し規約へ書き戻さない。
+- **Convergence**: in some round, zero new C/H, and the immediately following completeness critic (L-only, `advanced.md` §A5) is also empty. If round 1 is clean, converge immediately. Only when a fix occurred, re-run the relevant system, and converge when the post-fix round has zero new C/H.
+- **Cap (difficulty-linked)**: default 4 rounds. **While new C/H keeps decreasing every round, do not consume the cap** (if trending toward convergence, auto-extend up to +2; pilot 2's single hard spot required 7 rounds). Consume 1 cap only on a flat/divergent round. On extension, note it to the user in one line (including the increased estimated tokens). Before reaching the cap, the lead does one final reconsideration at maximum depth. If new C/H still remain, present the residual findings to the user (user gate "acceptance result" / "residual risk").
+- **Crew stretch/shrink for L multi-round**: read the above convergence/extension decisions together with the grounding outcomes in `channel_scoreboard` — channel dropping, routing weighting, and early folding are scoreboard-driven (`advanced.md` §A9). Drive on grounding outcomes only, not on subjective evaluation (protocol.md §7 invariant). The scoreboard is ephemeral, discarded at task end and not written back into the protocol.
