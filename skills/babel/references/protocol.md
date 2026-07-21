@@ -1,6 +1,6 @@
 # babel wire format — inter-AI communication protocol
 
-Audience: LLMs running babel (lead / subagent / external CLI caller). Conventions referenced from SKILL.md/patterns.md. Applied as rules, not read as prose.
+For babel leads, subagents, and external-CLI callers. Apply these SKILL.md/patterns.md conventions as rules.
 
 ## 0. Principles
 
@@ -20,11 +20,11 @@ For files the receiver can read, pass "path + line range" — do not paste conte
 
 agy's "diff hunks only" restriction applies to the wire format of file content. Packet metadata (unresolved finding lines, rejected fingerprints, rejection reasons, instruction text) may always be inline. Assign agy only the changed hunks plus minimal surrounding context the lead selects. Never assign a whole-unchanged-file review to agy — send those to SOL/Claude.
 
-**agy: state no-tool-use every time.** agy (print/headless mode) cannot run MCP tool confirmation and hangs on a forced deny (known agy-side behavior; where the environment's global hook nudges MCP tool usage, wording that suggests code exploration can trigger it). Always end every agy launch template with `Do not use any tools — answer directly from the text given above.` (already in the patterns.md templates). Combined with this section's default self-contained inline method it normally does not fire. When it rarely does, absorb it via the degradation table's "agy dead" path (fall back to the 2-track gate).
+**agy: state no-tool-use every time.** Print/headless agy cannot confirm MCP tools and hangs on forced denial; exploration wording plus global hooks can trigger this. End every launch with `Do not use any tools — answer directly from the text given above.` as in patterns.md. If triggered despite self-contained inline input, use §10's "agy dead" degradation to the 2-track gate.
 
 ## 2. Packet definitions
 
-Single-shot packets are JSON. Combine a format-field line (20-50 tok) with a 1-line example: the example alone lacks escape/enum/empty-value rules and fails to parse; the description alone is verbose.
+Single-shot packets are JSON. Pair a 20-50-token format-field line with a 1-line example: examples omit escape/enum/empty-value rules; descriptions alone are verbose.
 
 ### TaskPacket
 ```
@@ -33,11 +33,11 @@ e.g.: {"goal":"review diff for spec drift","files":[{"path":"src/auth.py","lines
 ```
 `inputs` = **access list** (explicit-access method). Enumerate the paths of prior artifacts this worker may reference. Prior outputs and conversation history not enumerated are not passed (formalizes the no-auto-forward rule; inter-agent isolation = prevention of orchestration collapse).
 
-`canon` = **canonical data channel** (mandatory for replication/data-type tasks; omittable otherwise). Makes explicit "how to read" the primary sources the artifact must be grounded in: enumerate the paths where raw values are obtainable (PDF text layer, EDINET XBRL, source CSV, raw API response, etc.) and prohibit degraded paths (image OCR only, screenshot eyeballing only, second-hand summaries). Real-task defect root cause = "authoring from image-reading only instead of primary sources". Without a canonical channel in the TaskPacket, the worker fills gaps via a handy degraded path and creates omissions.
+`canon` = **canonical data channel**, mandatory for replication/data tasks and otherwise optional. Enumerate primary-source paths and how to read them (PDF text layer, EDINET XBRL, source CSV, raw API response, etc.); prohibit degraded paths such as image-only OCR, screenshot eyeballing, and second-hand summaries. Without `canon`, workers may fill gaps through degraded paths, causing omissions.
 e.g.: `"canon":["Ground all numbers via the PDF text layer (pdfplumber). Values read from images/screenshots are prohibited"]`
 
 ### finding-jsonl
-1 line = 1 JSON array (for bulk output). Define the format via the format line inside the request prompt; output only array lines. Lines starting with `#` are ignored by the parser (tolerated). No key repetition; JSON escaping makes in-field newlines/tabs safe. TSV is not adopted (LLMs break literal tabs / in-field newlines — agy review #4).
+Bulk output uses one JSON array per line. Define the format in the request and output only array lines; the parser tolerates `#` lines. Arrays avoid key repetition, and JSON escapes in-field newlines/tabs. Do not use TSV: LLMs break literal tabs/in-field newlines (agy review #4).
 ```
 ["<id>","<sev C|H|M|L>","<file>",<line>,"<claim>","<evidence>"]
 e.g.: ["F1","C","auth.py",42,"token expiry unchecked","verify_token() decodes JWT without checking exp claim, so expired tokens authenticate successfully and revocation fails"]
@@ -79,13 +79,13 @@ Shared directory `.babel/<task>/`:
 {"round":1,"rejected":[{"path":"src/auth.py","symbol":"verify_token","invariant":"exp claim checked"}],"budget":{"sol_calls":3,"sol_deep":1,"agy_calls":2},"channel_scoreboard":{"sol":{"confirmed":2,"refuted":1},"agy":{"confirmed":0,"refuted":2},"claude":{"confirmed":3,"refuted":0}}}
 ```
 
-`channel_scoreboard` = **per-channel tally of grounding outcomes** (driving signal for within-task online adaptation; `advanced.md` §A9). `confirmed` = that channel's findings verified as real in grounding (actual code / primary source); `refuted` = those rejected as false positives in grounding. **Write only measured values settled by a grounding-resolution event (§7)** — never the lead's/LLM's subjective assessment that "this channel seems strong" (prevents circular-evaluation bias, §7). The lead appends on merge (scoreboard updates, like merges, are the lead's sole responsibility). The scoreboard shares `.babel/<task>/`'s lifetime and is discarded at task end (ephemeral). Never carry it to the next task or write it back into the conventions — this cuts off the persistence risks (self-reference lock, N=1 overfitting, permanent injection from external output).
+`channel_scoreboard` = **per-channel grounding-outcome tally** driving within-task online adaptation (`advanced.md` §A9). `confirmed` means verified against code/primary sources; `refuted` means grounded false positive. Record only §7 grounding-resolution events, never subjective LLM assessments. Only the lead appends during merge. Discard it with `.babel/<task>/`; never carry it across tasks or write it into conventions, preventing self-reference lock, N=1 overfitting, and permanent external-output injection.
 
 Discipline:
 - **Parallel append is prohibited.** Agents must not append to the same file concurrently (prevents TSV / line-interleave corruption). Write to per-agent files.
 - **Merging is the lead's sole responsibility.** Never delegate integration to another agent.
-- **Nested delegation requires prior declaration.** A subagent/track may compose grandchild agents only if it delegated with the caps (headcount, SOL/agy call counts) written explicitly in the TaskPacket. Unannounced nested delegation is prohibited — the budget inflates invisibly (real task: a track composed 5 grandchildren without notice; good result, invisible consumption). A track that used grandchildren must report the consumption count in its results, and the lead sums it into `budget` in `state.json`. `parallel()`/`pipeline()` inside a Workflow count as declared (the headcount is explicit in the script).
-- **SoT one-way discipline**: the main artifact (the actual files) is the SoT; the blackboard is its projection. If the lead directly edits the main artifact, write the post-edit state back to the corresponding changeset **before the next merge/redistribution**. Re-merging with a stale blackboard fragment rolls back the main edit (self-detected and recovered in a real task, but nearly an incident). Also prohibited: handing an old changeset to reviewers before writing back (it verifies against an old code version; same spirit as the §8 barrier).
+- **Nested delegation requires prior declaration.** TaskPackets must cap grandchild headcount and SOL/agy calls; undeclared nesting is prohibited. Tracks report grandchild consumption, which the lead adds to `state.json` `budget`. Workflow `parallel()`/`pipeline()` counts as declared because the script exposes headcount.
+- **SoT one-way discipline**: actual files are the SoT; the blackboard is a projection. After direct edits, update the corresponding changeset before merging or redistributing. Never re-merge or review a stale changeset; either can roll back or verify an old version (§8 barrier).
 
 ## 6. Inter-round delta (multi-round only)
 

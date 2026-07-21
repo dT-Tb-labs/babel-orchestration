@@ -5,7 +5,7 @@ description: Use when user invokes /agy or asks for a second-opinion code review
 
 # Antigravity CLI Cross-Review
 
-Send Claude-written code to the Google Antigravity CLI (`agy`) for an independent second opinion. Antigravity (Gemini 3 family) has different training data and reasoning patterns than Claude, so it surfaces missed bugs, security issues, and alternative approaches.
+Send Claude-written code to Google Antigravity CLI (`agy`; Gemini 3 family) for an independent second opinion that may surface missed bugs, security issues, or alternatives.
 
 Same workflow as `gemini-cli-review`, but launched via CLI binary + PTY wrapper.
 
@@ -13,7 +13,7 @@ Same workflow as `gemini-cli-review`, but launched via CLI binary + PTY wrapper.
 
 `agy -p` **silently drops stdout or hangs on non-TTY (subprocess / pipe / redirect)** ([upstream issue #76](https://github.com/google-antigravity/antigravity-cli/issues/76)). Unfixed as of v1.0.2.
 
-**Workaround (implemented):** [`agy_pty_wrapper.py`](agy_pty_wrapper.py) allocates a pseudo-terminal (PTY) and runs agy inside it, so agy's TTY detection succeeds and stdout flushes normally. The PTY backend is auto-selected per OS: **Windows = pywinpty (ConPTY) / Linux and macOS = ptyprocess**. The caller-side API is identical for both (pywinpty mirrors the Unix `ptyprocess` API). Verified on Windows (returns `OK`/`PONG` in ~30s); the Unix path is statically reviewed but untested on hardware.
+**Implemented workaround:** [`agy_pty_wrapper.py`](agy_pty_wrapper.py) runs agy in a pseudo-terminal so TTY detection and stdout work. It auto-selects **Windows = pywinpty (ConPTY) / Linux and macOS = ptyprocess**, using their identical caller API. Windows is verified (`OK`/`PONG` in ~30s); Unix is statically reviewed but hardware-untested.
 
 ## Prerequisites
 
@@ -23,7 +23,7 @@ Same workflow as `gemini-cli-review`, but launched via CLI binary + PTY wrapper.
 agy --version 2>&1 || "$LOCALAPPDATA/agy/bin/agy.exe" --version 2>&1
 ```
 
-Path resolution order (automatic in the wrapper): explicit `--agy-path` first, then an **OS branch** — Windows: `%LOCALAPPDATA%\agy\bin\agy.exe` → `PATH` (`shutil.which agy`); Linux/macOS: `PATH` → POSIX defaults (`~/.local/bin/agy`, `~/.antigravity/bin/agy`, `/usr/local/bin/agy`). On POSIX, if `agy` is not on PATH, specify `--agy-path`.
+Automatic resolution: `--agy-path` first; then Windows: `%LOCALAPPDATA%\agy\bin\agy.exe` → `PATH` (`shutil.which agy`); Linux/macOS: `PATH` → `~/.local/bin/agy`, `~/.antigravity/bin/agy`, `/usr/local/bin/agy`. On POSIX, use `--agy-path` when `agy` is off `PATH`.
 
 ### 2. Authentication (one time only)
 
@@ -42,7 +42,7 @@ python -c "import winpty" 2>&1 || pip install pywinpty
 python -c "import ptyprocess" 2>&1 || pip install ptyprocess
 ```
 
-Windows needs `pywinpty`; Linux/macOS need `ptyprocess`. The wrapper imports only the current OS's backend; if it is missing, it exits with code 4, showing the package name and a `pip install` hint.
+The wrapper imports only the current OS backend: Windows=`pywinpty`; Linux/macOS=`ptyprocess`. Missing backends exit 4 with the package name and `pip install` hint.
 
 ## Step 1: Determine the Review Target
 

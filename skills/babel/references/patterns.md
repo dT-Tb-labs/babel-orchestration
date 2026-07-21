@@ -45,7 +45,7 @@ Use Bash-side `timeout: 200000` alongside (per agy SKILL.md).
 
 ## build-debug
 
-Used in Phase 2 (implementation). Connects to superpowers:executing-plans / subagent-driven-development. The only babel-specific additions are checkpoint verification and model assignment.
+Phase 2 procedure over superpowers:executing-plans / subagent-driven-development; babel adds only checkpoint verification and model assignment.
 
 1. After task decomposition, delegate mechanical tasks (boilerplate, replacements, template filling) to Sonnet subagents; the lead writes the core logic requiring design judgment.
 2. **Cascade**: Sonnet does the first-pass draft/screening; only what passes is scrutinized by a higher model (lead/Opus). Do not route everything through the higher model.
@@ -64,7 +64,7 @@ The diagnosis-handoff playbook for when stuck in Phase 2 (two consecutive failed
 
 ## acceptance-gate
 
-Used in Phase 3 (acceptance). Applied by scale: **S = Claude adversarial review, 1 reviewer only** (run (a) with a single reviewer; skip the rest of this section. If an external reviewer is already up, SOL quick is fine, but small diffs are prone to SOL false positives, so Claude adversarial is the default). M = 1 round: 3-system review (a)(b)(c) plus the lead's merge and C/H fixes. The step-5 re-run loop, convergence check, and completeness critic are L-only. For M, post-fix confirmation is a single change-impact reviewer only (re-run one system whose scope intersects the fix diff and that reported the original finding; when multiple qualify, prefer SOL). L = full section. See SKILL.md Phase 0 for crew composition.
+Phase 3 by scale: **S = one Claude adversarial reviewer** using (a); skip the rest. SOL quick is acceptable if already running, but Claude is default because small diffs raise SOL false positives. **M = one (a)(b)(c) round**, lead merge, and C/H fixes; no step-5 loop, convergence check, or completeness critic. After an M fix, re-run one change-impact reviewer whose scope intersects the fix and reported the finding; prefer SOL when several qualify. **L = full section.** See SKILL.md Phase 0.
 
 **Review target = the actual changeset at the start of Phase 3** (fix the list of actually-edited files via `git diff --name-only` etc.), not the file list estimated during Phase 0 triage — if an out-of-scope shared module was touched during implementation, include it too (agy review #8).
 
@@ -73,7 +73,7 @@ Used in Phase 3 (acceptance). Applied by scale: **S = Claude adversarial review,
 ### Procedure
 
 1. Fix the changeset and dispatch the 3 systems.
-   - (a) Claude adversarial Workflow: the lead generates and runs a Workflow script on the spot (template below). The (a) adversarial verification is L-only; for M, the lead runs a simplified review with parallel Agents, without the Opus adjudication stage. **Reviewer count scales with diff size** (guideline; whole-changeset line counts): under 50 lines = 1 reviewer (all dimensions) / 50–200 lines = 2 reviewers / over 200 lines = 3 reviewers (dimension split). Pilot 1: 3 reviewers for a 44-line diff was excessive, reduced to 1.
+   - (a) Claude adversarial Workflow: generate/run the script below. Adversarial verification is L-only; M uses parallel Agents without Opus adjudication. Scale reviewers by whole-changeset lines: under 50 = 1/all dimensions; 50-200 = 2; over 200 = 3/dimension split. Pilot 1 showed 3 reviewers excessive for 44 lines, so use 1.
    - (b) agy: request review of the changeset's diff hunks inline.
    - (c) SOL normal: pass the changeset path via `.babel/<task>/inbox/` and request review.
    - (b)(c) dispatch simultaneously via `run_in_background`. (a) runs inside the lead's session.
@@ -84,7 +84,7 @@ Used in Phase 3 (acceptance). Applied by scale: **S = Claude adversarial review,
 
 ### (a) Claude adversarial Workflow template
 
-Generate per-dimension (correctness / security / edge-cases / spec-compliance) in parallel via `pipeline()` → adversarially verify each finding (Sonnet first-pass generation → Opus live/dead adjudication). **The full (a) Workflow template (JS) is in `advanced.md` §A6.** The (a) adversarial verification is L-only. **For M, the lead runs a simplified review with parallel Agents** (no Opus adjudication stage). Without the Workflow tool, substitute per-dimension review with parallel Agents.
+Run correctness / security / edge-cases / spec-compliance through `pipeline()` in parallel, then adversarially verify findings (Sonnet generation → Opus live/dead adjudication). Full L-only JS: `advanced.md` §A6. M uses parallel Agents without Opus; if Workflow is unavailable, use per-dimension parallel Agents.
 
 ### (b)(c) template
 
@@ -111,8 +111,8 @@ Bash `timeout: 300000` + `run_in_background: true`. A whole-changeset review is 
 1. **Fingerprint dedup**: match on `{path, symbol (function name / spec section ID), violated invariant}`. Do not use line numbers in the dedup key (protocol.md §7). Matching is a semantic comparison by the lead.
 2. Match against **both** the already-reported and already-rejected lists (prevents re-surfacing loops).
 3. Verify C/H only: batch 8–12 surviving findings per call. If a repro can run, verify with the reproduction command / failing test; if not, substitute an invariant argument (protocol.md §7, same section for repro safety rules).
-   **SOL findings on small diffs need grounding confirmation**: the smaller the changeset (guideline: under 50 lines), the higher SOL's acceptance false-positive rate (pilot 1: flagged trailing whitespace that did not exist). For an SOL-only finding on a small diff, always confirm the actual file lines during verification before adopting it (a finding another system agrees with may have its priority raised). Apply the same to S acceptance (SOL quick, single pass).
-4. Fix what passes verification. **Obligation to re-ground before repair**: do not fix by trusting an audit finding as-is. Before fixing, re-confirm the location against primary sources (`canon` channel / the actual line of the real file) and verify whether the finding's premise holds. Audits can produce false detections (pilot 2: the R4 system spontaneously re-grounded, preventing 2 false detections). The repair TaskPacket `constraints` must always include: "before fixing, re-ground against canon and confirm the finding's premise."
+   **Ground SOL findings on small diffs**: under 50 lines, SOL acceptance has more false positives (pilot 1 reported nonexistent trailing whitespace). Before adopting an SOL-only finding, confirm actual file lines; multi-system agreement may raise priority. Apply this to S SOL-quick acceptance too.
+4. Fix verified findings only. **Re-ground before repair** against primary sources (`canon` / actual file line) and confirm the premise; never trust an audit finding as-is. Pilot 2's R4 re-grounding prevented 2 false detections. Every repair TaskPacket must include constraint: `before fixing, re-ground against canon and confirm the finding's premise.`
 5. Re-run with **change-impact routing**: re-dispatch only the reviewers whose previous scope or unresolved findings intersect the fixed file/function (not unrelated reviewers). **For L multi-round, further narrow crew composition with `channel_scoreboard`** (protocol.md §5) — drop from the next round any channel with grounding confirmed=0 and refuted≥2 over the last 2 rounds (within-task online adaptation, `advanced.md` §A9). Each finding's grounding outcome (confirmed/refuted) is appended to the scoreboard at this merge stage (lead exclusively).
 6. Output M/L in line form like C/H, but do not verify or fix them. Present them to the user in the final report.
 
