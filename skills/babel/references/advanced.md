@@ -1,9 +1,8 @@
 # babel — advanced / edge appendix
 
-Real but rarely-fired rules: multi-round state machinery (stateless-CLI re-review
-across many rounds), the stuck-diagnosis playbook, cost-tier details, and long
-code templates. `SKILL.md`, `protocol.md`, and `patterns.md` point here to stay
-minimal. Read only for **L multi-round tasks** or when a core pointer sends you here.
+Rarely-fired rules: stateless-CLI multi-round state, stuck diagnosis, cost tiers,
+and long templates. Read only for **L multi-round tasks** or when `SKILL.md`,
+`protocol.md`, or `patterns.md` points here.
 
 ---
 
@@ -173,17 +172,17 @@ Low-stakes efficiency rules; ignore unless they bite.
 
 ## A9. Within-task channel adaptation (online, L multi-round only)
 
-Within a single task, autonomously adjust the channel crew composition live. **Fully autonomous, no human gate** — safe because it is **ephemeral**: learning is discarded at task end and `channel_scoreboard` shares the lifetime of `.babel/<task>/`. This is the decisive difference from offline convention evolution (persistent, human approval mandatory): kill cross-task persistence and the dangerous failure modes (self-reference lock, N=1 overfitting, permanent injection of external output) vanish, leaving only the autonomy. **Do not mix the two** — never write the scoreboard back into SKILL.md/protocol.md.
+Within one task, autonomously adjust channel composition with **no human gate**. This learning is **ephemeral**: discard `channel_scoreboard` with `.babel/<task>/` and never write it into SKILL.md/protocol.md. Unlike persistent offline convention evolution, this prevents self-reference lock, N=1 overfitting, and permanent external-output injection. **Do not mix the two**; offline evolution requires human approval.
 
 **Firing condition**: **L and multi-round** (≥3 rounds expected) only. S/M finish before learning ramps up, so keep the fixed crew composition (the bandit becomes noise).
 
-**Sole driving signal — grounded outcomes**: judge only by `confirmed`/`refuted` in `state.json.channel_scoreboard` (protocol.md §5). **Never drive by the lead's/LLM's subjective evaluation ("this channel seems good")** — the invariant of protocol.md §7. Both labels are grounded in real code / primary sources, not opinions.
+**Sole signal — grounded outcomes**: use only `confirmed`/`refuted` from `state.json.channel_scoreboard` (protocol.md §5), grounded in code/primary sources. Never use subjective lead/LLM evaluation (`protocol.md` §7 invariant).
 
 **Adjustment rule (multi-armed bandit, reward = confirmed/token)**: after each round's merge, read the scoreboard to decide the next round's crew composition. Early = exploration (fire all channels), late = exploitation.
 - **Drop**: a channel with `confirmed=0` and `refuted≥2` over the last 2 rounds → remove from the next round. Do not pay tokens for only false positives. Applies within the current task only; all channels revive next task.
 - **Exploitation (routing bias)**: if `confirmed` for a defect class concentrates in one channel, make it the priority re-run target of change-impact routing (protocol.md §9).
 - **Stretch/shrink**: read with the convergence trend (patterns.md termination condition) — if new C/H keeps declining and all channels skew `refuted`, treat as early convergence and fold the crew composition. While high `confirmed` continues, extend without consuming the difficulty-linked cap.
 
-**Grounding-cost discipline**: grounding costs the lead's context + tokens. Do not ground every find on every channel each round — extending protocol.md §7 "arbitrate only the differences," ground only findings that differ or are single-lineage, and record the result. Agreed findings (multiple lineages concur) count as `confirmed`.
+**Grounding-cost discipline**: because grounding consumes lead context/tokens, ground only differing or single-lineage findings and record outcomes (protocol.md §7); multiple-lineage agreement counts as `confirmed`.
 
 **Observing ensemble value (byproduct)**: the scoreboard records for free which channel earned grounding-confirmed findings. If on some task `confirmed` comes almost entirely from one channel (e.g. Claude introspection), that is direct evidence that — **for that task** — the other channels could not earn their tokens (ablation by observation). This describes one task and is not grounds for a convention change; it revises the crew-composition table only after cross-task offline analysis + a human gate.

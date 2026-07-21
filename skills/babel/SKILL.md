@@ -5,9 +5,9 @@ description: Use when the user invokes /babel, or asks to orchestrate multiple m
 
 # babel — 5-model orchestration
 
-Reader: the lead LLM (you) launched via `/babel <task>`. This file is the execution runbook. Communication rules and packet formats live in `references/protocol.md`; per-phase execution procedures live in `references/patterns.md`.
+Execution runbook for the lead LLM launched via `/babel <task>`. Communication/packet rules: `references/protocol.md`; phase procedures: `references/patterns.md`.
 
-This is an **extension layer** on top of superpowers. superpowers:brainstorming / superpowers:writing-plans / superpowers:executing-plans / superpowers:subagent-driven-development are used unchanged. babel injects multi-model crew composition into each phase; it adds no new process and no new execution code — only crew-composition conventions over the existing cdx-sol.mjs / agy_pty_wrapper.py / Workflow tools / superpowers skill set.
+babel extends superpowers:brainstorming / superpowers:writing-plans / superpowers:executing-plans / superpowers:subagent-driven-development unchanged, adding only multi-model crew conventions around cdx-sol.mjs / agy_pty_wrapper.py / Workflow tools / superpowers skill set — no new process or execution code.
 
 ## Crew table
 
@@ -23,7 +23,7 @@ Crew size (2/3/5 members) = independent acceptance tracks + dedicated roles. Mec
 
 ## Dependencies & minimal setup
 
-babel's only required dependency is **Claude Code itself** (lead + Agent/Workflow tools). Everything else is optional and degrades gracefully. Install and self-check via the repo-bundled `install.sh` (`sh install.sh` copies files and runs a per-channel self-test; a missing optional channel warns and continues).
+Only **Claude Code** (lead + Agent/Workflow tools) is required; all other dependencies degrade gracefully. Repo-bundled `install.sh` installs and self-checks (`sh install.sh`; missing optional channels warn and continue).
 
 | Dependency | Category | Degradation if absent |
 |---|---|---|
@@ -34,7 +34,7 @@ babel's only required dependency is **Claude Code itself** (lead + Agent/Workflo
 
 ### Single-channel minimal mode (Claude only)
 
-**babel runs first-class even with neither SOL nor agy.** Independence then degrades from "across distinct models" to "distinct viewpoints within a single Claude + adversarial verification". Make explicit the one point of "reduced independence (no external models)"; the multi-model crew skeleton (design debate / acceptance gate / build-debug) is kept.
+**babel runs first-class without SOL or agy.** Independence becomes "distinct viewpoints within one Claude + adversarial verification"; explicitly report "reduced independence (no external models)" and retain design debate / acceptance gate / build-debug.
 
 Degradation by scale:
 - **S**: Lead-only design + implementation. Acceptance = one Claude adversarial review (the 1-member acceptance-gate (a); see patterns.md), substituting for SOL quick.
@@ -74,7 +74,7 @@ The multi-model crew injection points are preserved in all cases. superpowers ea
 | Phase 2 Implementation | `#build-debug` + when-stuck `#sequential-switching` | All scales |
 | Phase 3 Acceptance | `#acceptance-gate` | S=1 Claude adversarial / M=1 round / L=full loop |
 
-For each pattern's launch-command template, checkpoint procedure, and loop termination conditions, see the corresponding heading in `references/patterns.md`.
+For each pattern's launch template, checkpoint, and termination conditions, see its heading in `references/patterns.md`.
 
 ## Ensemble discipline (always enforced)
 
@@ -83,7 +83,7 @@ The core multi-model crew disciplines are pointers here:
 - Same-round reviewer mutual blindness → `protocol.md` §8.
 - Anchoring avoidance (don't read external input until your own proposal is complete) → `patterns.md` #debate-aggregation.
 - Centralization of shared state (plan + blackboard only) → `protocol.md` §5.
-- **When stuck, spontaneously think at maximum depth**: right before falling to a user gate — e.g. arbitration fails to close the divergence, or the acceptance cap is reached — the lead reconsiders once at maximum depth before giving up (ultrathink-equivalent: lay out all attempts and diagnoses and comb through the contradictions; via Workflow, `effort: 'max'`). If still unresolved, go to the user gate.
+- **When stuck, think once at maximum depth before a user gate** — including unresolved arbitration or a reached acceptance cap. Lay out all attempts/diagnoses and inspect contradictions (ultrathink-equivalent; Workflow `effort: 'max'`); if unresolved, use the user gate.
 - **In-task channel adaptation (online, fully autonomous, L multi-round only)**: during execution, live-adjust the channel crew composition autonomously, using only grounded outcomes (`state.json.channel_scoreboard`, §5) as the signal — drop a channel that only produces false positives, weight routing toward channels where confirmed findings concentrate, fold early. Because it is **ephemeral** (discarded at task end, never written back into the conventions), it needs no human gate: this cuts off persistence risks (self-reference, N=1 overfitting, permanent injection of external output). It is **driven only by grounded outcomes, never by the LLM's subjective evaluation** (protocol.md §7 invariant). Do not mix online adaptation (ephemeral, fully autonomous) with offline evolution of the conventions (persistent, human approval mandatory). Details → `references/advanced.md` §A9. S/M use a fixed lineup (too little data to learn from).
 
 ## Cost discipline
