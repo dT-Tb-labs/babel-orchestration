@@ -66,7 +66,7 @@ else
   exit 1
 fi
 # babel runtime prereqs (superpowers + Workflow tool) live inside Claude Code and
-# cannot be probed from a shell — see skills/babel/SKILL.md "依存と縮退".
+# cannot be probed from a shell — see skills/babel/SKILL.md "Dependencies & minimal setup".
 note "babel needs the superpowers skill set + Workflow tool inside Claude Code (not shell-checkable; see SKILL.md)"
 
 # cdx-sol (optional): Node + companion + auth

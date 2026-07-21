@@ -3,39 +3,39 @@ name: agy
 description: Use when user invokes /agy or asks for a second-opinion code review via Google Antigravity CLI (`agy`). Sibling of gemini-cli-review.
 ---
 
-# Antigravity CLI クロスレビュー
+# Antigravity CLI Cross-Review
 
-Claude Code が書いたコードを Google Antigravity CLI (`agy`) に送り、独立した第二の視点でレビュー。
-Claude とは異なる学習データ・推論パターンを持つ Antigravity (Gemini 3 系) の指摘を取り込み、
-見落としたバグ・セキュリティ問題・代替アプローチを発見する。
+Send code written by Claude Code to the Google Antigravity CLI (`agy`) and get a review from an independent second perspective.
+By incorporating findings from Antigravity (Gemini 3 family), which has different training data and reasoning patterns than Claude,
+you surface missed bugs, security issues, and alternative approaches.
 
-`gemini-cli-review` と同じワークフロー。違い: CLI バイナリ + PTY wrapper 経由起動。
+Same workflow as `gemini-cli-review`. Difference: launched via CLI binary + PTY wrapper.
 
-## 上流バグ #76 と回避策
+## Upstream Bug #76 and Workaround
 
-`agy -p` は **非 TTY (subprocess / pipe / redirect) で stdout を silently drop or ハング** する ([upstream issue #76](https://github.com/google-antigravity/antigravity-cli/issues/76))。v1.0.2 時点未修正。
+`agy -p` **silently drops stdout or hangs on non-TTY (subprocess / pipe / redirect)** ([upstream issue #76](https://github.com/google-antigravity/antigravity-cli/issues/76)). Unfixed as of v1.0.2.
 
-**回避策 (実装済):** [`agy_pty_wrapper.py`](agy_pty_wrapper.py) が擬似端末 (PTY) を確保し、その内側で agy を起動。agy の TTY 検出が成功し stdout が正常 flush される。PTY バックエンドは OS 別に自動選択: **Windows = pywinpty (ConPTY) / Linux・macOS = ptyprocess**。呼び出し側 API は両者で同一 (pywinpty が Unix `ptyprocess` の API を意図的にミラー)。動作確認済 (Windows: `OK`/`PONG` 返却 ~30 秒。Unix 経路は静的レビュー済・実機未検証)。
+**Workaround (implemented):** [`agy_pty_wrapper.py`](agy_pty_wrapper.py) allocates a pseudo-terminal (PTY) and launches agy inside it. agy's TTY detection succeeds and stdout flushes normally. The PTY backend is auto-selected per OS: **Windows = pywinpty (ConPTY) / Linux and macOS = ptyprocess**. The caller-side API is identical for both (pywinpty intentionally mirrors the Unix `ptyprocess` API). Verified working (Windows: returns `OK`/`PONG` in ~30 seconds. The Unix path has been statically reviewed but not tested on real hardware).
 
-## 前提条件
+## Prerequisites
 
-### 1. `agy` バイナリ
+### 1. `agy` binary
 
 ```bash
 agy --version 2>&1 || "$LOCALAPPDATA/agy/bin/agy.exe" --version 2>&1
 ```
 
-パス解決順 (wrapper が自動): まず `--agy-path` 明示。次は **OS 分岐** — Windows は `%LOCALAPPDATA%\agy\bin\agy.exe` → `PATH` (`shutil.which agy`)、Linux・macOS は `PATH` → POSIX 既定候補 (`~/.local/bin/agy`, `~/.antigravity/bin/agy`, `/usr/local/bin/agy`)。POSIX では PATH 上に `agy` があれば自動検出、無ければ `--agy-path` 指定。
+Path resolution order (handled automatically by the wrapper): first, explicit `--agy-path`. Next, an **OS branch** — on Windows, `%LOCALAPPDATA%\agy\bin\agy.exe` → `PATH` (`shutil.which agy`); on Linux and macOS, `PATH` → POSIX default candidates (`~/.local/bin/agy`, `~/.antigravity/bin/agy`, `/usr/local/bin/agy`). On POSIX, `agy` is auto-detected if it is on PATH; otherwise, specify `--agy-path`.
 
-### 2. 認証 (1 回のみ)
+### 2. Authentication (one time only)
 
 ```powershell
 agy auth login
 ```
 
-PowerShell 起動 → ブラウザログイン。完了後永続。
+Launch PowerShell → log in via browser. Persistent after completion.
 
-### 3. PTY wrapper 依存 (OS 別)
+### 3. PTY wrapper dependencies (per OS)
 
 ```bash
 # Windows:
@@ -44,21 +44,21 @@ python -c "import winpty" 2>&1 || pip install pywinpty
 python -c "import ptyprocess" 2>&1 || pip install ptyprocess
 ```
 
-Windows は `pywinpty`、Linux・macOS は `ptyprocess` が必須。wrapper は当該 OS のバックエンドのみ import し、無ければ exit 4 でパッケージ名と `pip install` ヒントを表示する。
+`pywinpty` is required on Windows, `ptyprocess` on Linux and macOS. The wrapper imports only the backend for the current OS, and if it is missing, exits with code 4, showing the package name and a `pip install` hint.
 
-## Step 1: レビュー対象の決定
+## Step 1: Determine the Review Target
 
-**引数あり (`/agy <ファイルパス>`):**
-- 指定ファイルを `Read` で読込
+**With an argument (`/agy <filepath>`):**
+- Read the specified file with `Read`
 
-**引数なし (`/agy`):**
-- 直近のセッションで Claude が編集・作成したファイル特定
-- 複数なら全部読込 (多すぎる場合ユーザー確認)
-- 特定不能なら「レビュー対象パスを教えてください」と尋ねる
+**Without an argument (`/agy`):**
+- Identify files Claude edited or created in the recent session
+- If there are multiple, read them all (confirm with the user if there are too many)
+- If none can be identified, ask "Please tell me the review target path."
 
-## Step 2: PTY wrapper 経由で agy 起動
+## Step 2: Launch agy via the PTY Wrapper
 
-プロンプトは引数渡し。タイムアウトは wrapper 側 `--timeout` と Bash 側 `timeout` 両方設定:
+Pass the prompt as an argument. Set the timeout on both the wrapper side (`--timeout`) and the Bash side (`timeout`):
 
 ```bash
 python "$HOME/.claude/skills/agy/agy_pty_wrapper.py" \
@@ -67,11 +67,11 @@ python "$HOME/.claude/skills/agy/agy_pty_wrapper.py" \
 Review the following code:
 
 <filename>
-[ファイル名]
+[filename]
 </filename>
 
 <code>
-[コード内容]
+[code content]
 </code>
 
 Please evaluate:
@@ -84,9 +84,9 @@ Be concise and direct. Flag only meaningful issues, not minor style nitpicks. If
   --timeout 180
 ```
 
-Bash ツール側 `timeout: 200000` (200 秒) を併用。
+Also use `timeout: 200000` (200 seconds) on the Bash tool side.
 
-**プロンプト引数 escape:** プロンプト内にダブルクォートが多い場合、heredoc → 環境変数経由が安全:
+**Prompt argument escaping:** If the prompt contains many double quotes, passing it via a heredoc → environment variable is safer:
 
 ```bash
 PROMPT=$(cat <<'EOF'
@@ -96,70 +96,70 @@ EOF
 python "$WRAPPER" "$PROMPT" --timeout 180
 ```
 
-**モデル選択について:** `agy` には `-m` 相当のフラグ無し。CLI 側で固定 (現状 Gemini 3 系)。`gemini-cli-review` のような文字数別モデル切替はしない。
+**About model selection:** `agy` has no flag equivalent to `-m`. It is fixed on the CLI side (currently the Gemini 3 family). Unlike `gemini-cli-review`, it does not switch models by character count.
 
-## Step 3: 結果の整理と表示
+## Step 3: Organize and Display the Results
 
-wrapper の stdout (ANSI 除去済) をパース。以下フォーマットで整理:
+Parse the wrapper's stdout (ANSI already stripped). Organize it in the following format:
 
 ```markdown
-## Antigravity クロスレビュー結果
+## Antigravity Cross-Review Results
 
-**レビュー対象:** `<ファイル名>`
+**Review target:** `<filename>`
 
-### 重要な指摘
-(重要度順。なければ「指摘なし」)
-- **[CRITICAL/HIGH/MEDIUM]** 指摘内容
+### Key Findings
+(In order of severity. If none, "No findings")
+- **[CRITICAL/HIGH/MEDIUM]** finding
 
-### 代替アプローチの提案
-(あれば記載。なければ省略)
+### Suggested Alternative Approaches
+(Include if any. Omit if none)
 - ...
 
-### Claude からのコメント
-(各指摘に対する Claude の判断。
- 「正しい、修正必要」「現コンテキストでは問題ない、理由〜」など。
- 見落としは率直に認める。)
+### Comments from Claude
+(Claude's judgment on each finding.
+ "Correct, needs fixing", "Not a problem in the current context, because ~", etc.
+ Frankly acknowledge oversights.)
 ```
 
-## Step 4: 修正への誘導
+## Step 4: Guide Toward Fixes
 
-「修正が必要」と判断した指摘があれば:
-- 「〇〇を修正しますか？」と提案
-- 承認後、通常の編集フローで修正
+If there are findings judged as "needs fixing":
+- Propose "Shall I fix X?"
+- After approval, fix it through the normal editing flow
 
-## トラブルシュート
+## Troubleshooting
 
-| 症状 | 原因 / 対処 |
+| Symptom | Cause / Fix |
 |------|------------|
-| 出力が **`Python` の1語だけ**で即終了 (no review) | `python`/`python3` が **WindowsApps stub**(App実行エイリアス)で本物のインタプリタでない。**`python3.13`**(または `py -3.13`)で wrapper を起動する。本 SKILL のコマンド例の `python` は環境により要置換。 |
-| wrapper exit 4 + "pywinpty/ptyprocess not installed" | 表示された `pip install <pkg>` を実行 (Windows=pywinpty / POSIX=ptyprocess) |
-| wrapper exit 3 + "agy executable not found" | `--agy-path` 指定 or インストール確認 (POSIX は PATH 上に `agy` があるか確認) |
-| wrapper exit 2 + 空 stdout | agy が TTY 内でも応答せず。auth 期限切れ確認: `agy auth login` 再実行 |
-| wrapper timeout (exit 2 + "Timeout after") | プロンプト巨大 or upstream 障害。`--timeout` 延長、`--print-timeout 5m` |
-| ハング 200 秒超 | Bash 側 timeout 切れ。wrapper の `--timeout` 値が Bash timeout 未満か確認 |
-| 日本語化け | wrapper は ANSI 除去のみ。文字化けは agy 出力側問題。プロンプトで「Reply in English」指定回避 |
+| Output is **just the single word `Python`** and exits immediately (no review) | `python`/`python3` is the **WindowsApps stub** (App Execution Alias), not the real interpreter. Launch the wrapper with **`python3.13`** (or `py -3.13`). The `python` in this SKILL's command examples may need to be replaced depending on the environment. |
+| wrapper exit 4 + "pywinpty/ptyprocess not installed" | Run the `pip install <pkg>` shown (Windows=pywinpty / POSIX=ptyprocess) |
+| wrapper exit 3 + "agy executable not found" | Specify `--agy-path` or check the installation (on POSIX, verify `agy` is on PATH) |
+| wrapper exit 2 + empty stdout | agy is unresponsive even inside a TTY. Check for expired auth: re-run `agy auth login` |
+| wrapper timeout (exit 2 + "Timeout after") | Prompt is huge or upstream outage. Extend `--timeout`, `--print-timeout 5m` |
+| Hangs beyond 200 seconds | Bash-side timeout expired. Verify the wrapper's `--timeout` value is less than the Bash timeout |
+| Garbled Japanese text | The wrapper only strips ANSI. Garbled text is an issue on agy's output side. Avoid it by specifying "Reply in English" in the prompt |
 
-## 出力例
+## Example Output
 
 ```markdown
-## Antigravity クロスレビュー結果
+## Antigravity Cross-Review Results
 
-**レビュー対象:** `src/auth.py`
+**Review target:** `src/auth.py`
 
-### 重要な指摘
-- **[HIGH]** `verify_token()` でトークン有効期限チェック欠如
-- **[MEDIUM]** パスワードハッシュに MD5 使用 (bcrypt/argon2 推奨)
+### Key Findings
+- **[HIGH]** `verify_token()` lacks a token expiration check
+- **[MEDIUM]** MD5 used for password hashing (bcrypt/argon2 recommended)
 
-### 代替アプローチの提案
-- `PyJWT.decode()` は `exp` claim を自動検証する
+### Suggested Alternative Approaches
+- `PyJWT.decode()` automatically validates the `exp` claim
 
-### Claude からのコメント
-有効期限チェック指摘は正しい。実装時の見落とし。
-MD5 は既存システム互換のため意図的。新規パスワードは bcrypt 移行を検討。
+### Comments from Claude
+The expiration-check finding is correct. An oversight during implementation.
+MD5 is intentional for compatibility with the existing system. Consider migrating new passwords to bcrypt.
 
-修正しますか？ `verify_token()` に有効期限チェック追加可能。
+Shall I fix it? I can add an expiration check to `verify_token()`.
 ```
 
-## 実装ファイル
+## Implementation Files
 
-- [`agy_pty_wrapper.py`](agy_pty_wrapper.py) — cross-platform PTY wrapper (Windows=pywinpty ConPTY / POSIX=ptyprocess、本スキル独自実装、bug #76 解消後も無害)
+- [`agy_pty_wrapper.py`](agy_pty_wrapper.py) — cross-platform PTY wrapper (Windows=pywinpty ConPTY / POSIX=ptyprocess; custom implementation for this skill, harmless even after bug #76 is resolved)
