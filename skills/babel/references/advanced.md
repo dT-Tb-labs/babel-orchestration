@@ -172,3 +172,20 @@ Low-stakes efficiency rules; ignore unless they bite.
 - Workflow internals use `pipeline()` so dimension A's verify runs while dimension B still reviews.
 - Instruction re-send: Claude subagents get a protocol pointer + stable prefix (prompt-cache hit); SOL gets the inline spec each time (re-reading saves nothing).
 - Input-echo ban: findings cite `file:line`, not quoted hunks (unless the quote is the evidence).
+
+## A9. タスク内チャネル適応（オンライン・L多ラウンド専用）
+
+1タスクの実行中に、チャネル編成をライブで自律調整する。**人間ゲート不要の全自律** — ただし**エフェメラル**（学習はタスク終了で破棄。`channel_scoreboard` は `.babel/<task>/` と同寿命）だから安全に自律化できる。これがオフラインの規約進化（永続・人間承認必須）と決定的に違う点: タスク跨ぎの永続化を殺せば、危険な失敗モード（自己参照ロック・N=1過学習・外部出力の恒久インジェクション）が原理的に消え、自律性だけが残る。**両者を混ぜない** — scoreboardをSKILL.md/protocol.mdへ書き戻さない。
+
+**発火条件**: **L かつ 多ラウンド**（3ラウンド以上回る見込み）のみ。S/Mは数ラウンドで終わり学習が立ち上がる前にタスクが尽きる → 固定編成のまま調整しない（バンディットはノイズになる）。
+
+**駆動信号は接地アウトカムのみ**: `state.json.channel_scoreboard`（protocol.md §5）の `confirmed`/`refuted` だけで判断する。**リード/LLMの主観評価（「このチャネルが良さそう」）では絶対に駆動しない** — protocol.md §7 の不変条件。`confirmed`/`refuted` はどちらも実コード/一次資料に接地したラベルであって意見ではない。
+
+**調整規則（多腕バンディット、報酬 = confirmed/token）**: 各ラウンドのマージ後、scoreboardを読んで次ラウンド編成を決める。序盤=探索（全チャネル発射）、終盤=活用。
+- **ドロップ**: あるチャネルが直近2ラウンドで `confirmed=0` かつ `refuted≥2` → 次ラウンドから外す。偽陽性しか出さないチャネルにトークンを払わない。ドロップは当該タスク内のみ（次タスクで全チャネル復活）。
+- **活用（ルーティング偏重）**: 特定欠陥クラスの `confirmed` があるチャネルに偏るなら、変更影響ルーティング（protocol.md §9）の再実行先をそのチャネル優先にする。
+- **伸縮**: 収束トレンド（patterns.md 終了条件）と併読 — 新規C/Hが減り続け全チャネルが `refuted` 偏りなら早期収束と見て編成を畳む。逆に高 `confirmed` が続くうちは難度連動capを消費せず伸長する。
+
+**接地コスト規律**: 接地はタダではない（リードのコンテキスト＋トークン）。全find全チャネルを毎ラウンド接地しない — protocol.md §7「調停は相違分のみ」の延長で、相違した/単独系統のfindingにだけ接地をかけ結果をscoreboardへ記録。合意済み（複数系統一致）は `confirmed` 扱い。
+
+**アンサンブル価値の観測（副産物）**: scoreboardは「どのチャネルが接地確認findingを稼いだか」を無料で記録する。あるタスクで `confirmed` がほぼ単一チャネル（例: Claude内省）からしか出ていなければ、**そのタスクに関する限り**他チャネルはトークンを稼げなかったという直接証拠になる（観測によるアブレーション）。これは単発タスクの記述であって規約変更の根拠にはしない — 複数タスク横断のオフライン分析＋人間ゲートを経て初めて編成表の改定に使う。

@@ -73,11 +73,13 @@ agyの「diffハンクのみ」制限はファイル内容の転送形態に対�
 - エージェント別結果ファイル — 命名 `results/<agent>-r<round>.jsonl`。write-once（追記・上書き禁止、ラウンド毎に新ファイル）。
 - `state.json` — ラウンド番号・棄却済み指紋・cursors・予算消費を記録。
 
-`state.json` は round・rejected指紋・budget を記録（例は下）。cursor/delta/デルタ読み/棄却指紋の失効/ラウンド間デルタ送付（旧§6）は**多ラウンド専用** → `advanced.md` §A1。
+`state.json` は round・rejected指紋・budget・channel_scoreboard を記録（例は下）。cursor/delta/デルタ読み/棄却指紋の失効/ラウンド間デルタ送付（旧§6）は**多ラウンド専用** → `advanced.md` §A1。
 
 ```json
-{"round":1,"rejected":[{"path":"src/auth.py","symbol":"verify_token","invariant":"exp claim checked"}],"budget":{"sol_calls":3,"sol_deep":1,"agy_calls":2}}
+{"round":1,"rejected":[{"path":"src/auth.py","symbol":"verify_token","invariant":"exp claim checked"}],"budget":{"sol_calls":3,"sol_deep":1,"agy_calls":2},"channel_scoreboard":{"sol":{"confirmed":2,"refuted":1},"agy":{"confirmed":0,"refuted":2},"claude":{"confirmed":3,"refuted":0}}}
 ```
+
+`channel_scoreboard` = **接地アウトカムのチャネル別集計**（タスク内オンライン適応の駆動信号。`advanced.md` §A9）。`confirmed` = そのチャネルのfindingが接地（実コード/一次資料）で実在確認された数、`refuted` = 接地で偽陽性と棄却された数。**書けるのは接地解消イベント（§7）で確定した実測値のみ** — 「このチャネルは優秀そう」というリード/LLMの主観評価は書かない（循環評価バイアス防止、§7）。マージ時にリードが追記する（scoreboard更新もマージ同様リード専任）。scoreboardは `.babel/<task>/` と同寿命でタスク終了時に破棄する（エフェメラル）。次タスクへ持ち越さない・規約へ書き戻さない — これが永続化リスク（自己参照ロック・N=1過学習・外部出力の恒久インジェクション）を断つ要。
 
 規律:
 - **並列appendは禁止。** 複数エージェントが同一ファイルに同時追記しない（TSV/行interleave破損防止）。エージェント別ファイルに書かせる。
@@ -96,6 +98,7 @@ agyの「diffハンクのみ」制限はファイル内容の転送形態に対�
 - **repro安全規則**: 自己完結・時間制限付き・常駐プロセス/デーモン生成禁止・作った一時資源は自前でcleanup。実行前にリードが内容確認（サンドボックスなしホストのため）。
 - **指紋はシンボルアンカー**: dedup指紋 = `{path, シンボル（関数名/spec節ID）, 違反不変条件}`。行番号は表示用でありdedupキーに使わない（修正による行ズレで再浮上ループ化するため）。dedup照合はリードによる意味比較（機械的文字列一致ではない）。
 - **合意済み相互確認禁止**: 複数系統一致の指摘を他モデルに再確認させない。調停は相違分のみ。
+- **接地解消イベント（labeled outcome）**: findingを接地（実コード/一次資料）で検証した瞬間が、babelが正常運転中にタダで生成する唯一の**現実に接地したラベル**である。結果は2値 — `confirmed`（実在の欠陥として接地確認）/ `refuted`（偽陽性として接地棄却、パイロット3のagy 2件が実例）。これは*別LLMの意見*ではなく*コード/一次資料*に接地している。チャネル別に集計して `state.json.channel_scoreboard`（§5）へ記録し、オンライン適応（`advanced.md` §A9）の駆動信号にする。**不変条件**: この集計＝接地アウトカムのみが適応を駆動してよい。LLMの自己評価（「このチャネルは調子が良い」）で駆動してはならない（タスク内に循環評価バイアスが舞い戻るため）。接地コスト規律: 全find全チャネルを毎回接地しない — 上の「調停は相違分のみ」の延長で、相違した/単独系統のfindingにだけ接地をかける。合意済み（複数系統一致）は既に強い信号なので `confirmed` 扱いでよい。
 - **schema検証ゲート**: 外部出力は摂取前に形式検証する。非適合（散文・エラー文・空）は**チャネル障害**として縮退処理し、findingとして摂取しない（§10の縮退運転を発火）。リテラル`NONE`は有効なクリーン出力として受理する（チャネル障害ではない）。
 - 検証バッチ化（8-12件/呼）・ログ圧縮・同一外部の同時多重禁止（性能微調整）は `advanced.md` §A8。
 
