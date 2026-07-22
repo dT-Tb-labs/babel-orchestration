@@ -79,7 +79,7 @@ Shared directory `.babel/<task>/`:
 {"round":1,"rejected":[{"path":"src/auth.py","symbol":"verify_token","invariant":"exp claim checked"}],"budget":{"sol_calls":3,"sol_deep":1,"agy_calls":2},"channel_scoreboard":{"sol":{"confirmed":2,"refuted":1},"agy":{"confirmed":0,"refuted":2},"claude":{"confirmed":3,"refuted":0}}}
 ```
 
-`channel_scoreboard` = **per-channel grounding-outcome tally** driving within-task online adaptation (`advanced.md` §A9). `confirmed` means verified against code/primary sources; `refuted` means grounded false positive. Record only §7 grounding-resolution events, never subjective LLM assessments. Only the lead appends during merge. Discard it with `.babel/<task>/`; never carry it across tasks or write it into conventions, preventing self-reference lock, N=1 overfitting, and permanent external-output injection.
+`channel_scoreboard` = **per-channel grounding-outcome tally** driving within-task online adaptation (`advanced.md` §A9). `confirmed` means verified against code/primary sources; `refuted` means grounded false positive. Record only §7 grounding-resolution events. Only the lead appends during merge. Discard it with `.babel/<task>/`; never carry it across tasks or write it into conventions (rationale → `advanced.md` §A9).
 
 Discipline:
 - **Parallel append is prohibited.** Agents must not append to the same file concurrently (prevents TSV / line-interleave corruption). Write to per-agent files.

@@ -183,6 +183,6 @@ Within one task, autonomously adjust channel composition with **no human gate**.
 - **Exploitation (routing bias)**: if `confirmed` for a defect class concentrates in one channel, make it the priority re-run target of change-impact routing (protocol.md §9).
 - **Stretch/shrink**: read with the convergence trend (patterns.md termination condition) — if new C/H keeps declining and all channels skew `refuted`, treat as early convergence and fold the crew composition. While high `confirmed` continues, extend without consuming the difficulty-linked cap.
 
-**Grounding-cost discipline**: because grounding consumes lead context/tokens, ground only differing or single-lineage findings and record outcomes (protocol.md §7); multiple-lineage agreement counts as `confirmed`.
+**Grounding-cost discipline** (protocol.md §7): ground only differing or single-lineage findings; multiple-lineage agreement counts as `confirmed`.
 
 **Observing ensemble value (byproduct)**: the scoreboard records for free which channel earned grounding-confirmed findings. If on some task `confirmed` comes almost entirely from one channel (e.g. Claude introspection), that is direct evidence that — **for that task** — the other channels could not earn their tokens (ablation by observation). This describes one task and is not grounds for a convention change; it revises the crew-composition table only after cross-task offline analysis + a human gate.
