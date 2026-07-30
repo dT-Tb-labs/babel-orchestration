@@ -7,7 +7,7 @@ description: Use when the user invokes /babel, or asks to orchestrate multiple m
 
 Execution runbook for the lead LLM launched via `/babel <task>`. Communication/packet rules: `references/protocol.md`; phase procedures: `references/patterns.md`.
 
-babel extends superpowers:brainstorming / superpowers:writing-plans / superpowers:executing-plans / superpowers:subagent-driven-development unchanged, adding only multi-model crew conventions around cdx-sol.mjs / agy_pty_wrapper.py / Workflow tools / superpowers skill set — no new process or execution code.
+babel extends superpowers:brainstorming / superpowers:writing-plans / superpowers:executing-plans / superpowers:subagent-driven-development unchanged, adding only multi-model crew conventions around cdx-sol.mjs / agyask / Workflow tools / superpowers skill set — no new process or execution code.
 
 ## Crew table
 

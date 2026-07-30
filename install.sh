@@ -12,6 +12,7 @@ set -eu
 
 SRC_DIR="$(CDPATH= cd "$(dirname "$0")/skills" && pwd)"
 DEST="${CLAUDE_SKILLS:-$HOME/.claude/skills}"
+BIN="${CLAUDE_BIN:-$HOME/.local/bin}"
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
 
@@ -52,6 +53,12 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
       note "source skill missing: $s (skipped)"
     fi
   done
+  if [ -f "$SRC_DIR/agy/agyask" ]; then
+    mkdir -p "$BIN"
+    cp "$SRC_DIR/agy/agyask" "$BIN/agyask"
+    chmod +x "$BIN/agyask"
+    ok "installed agyask -> $BIN"
+  fi
 fi
 
 # ---- self-test ----
@@ -90,9 +97,14 @@ importlib.import_module("winpty" if sys.platform.startswith("win") else "ptyproc
 PYEOF
   then
     if agy_present; then
-      ok "agy channel ready ($PYTHON + $PTY_PKG + agy binary)"
+      if command -v agyask >/dev/null 2>&1; then
+        ok "agy channel ready ($PYTHON + $PTY_PKG + agy binary + agyask)"
+      else
+        note "agyask not on PATH — babel calls agy through it. Add $BIN to PATH (channel degrades off until then)."
+      fi
+      note "agy runs outside the Claude Code sandbox: add \"agyask\" AND \"agyask *\" to sandbox.excludedCommands in ~/.claude/settings.json (the bare name alone only matches argument-less calls)"
     else
-      note "agy binary not found (PATH or known locations) — install agy + 'agy auth login', or pass --agy-path. Channel will degrade off."
+      note "agy binary not found (PATH or known locations) — install agy and sign in by running it interactively once, or pass --agy-path. Channel will degrade off."
     fi
   else
     note "$PTY_PKG not installed for $PYTHON — run: $PYTHON -m pip install $PTY_PKG (agy channel degrades off)"

@@ -1,0 +1,44 @@
+#!/bin/sh
+# agyask — the normal way to call agy non-interactively.
+#
+# Installed to ~/.local/bin by install.sh. Two things it guarantees:
+#
+# 1. Output actually arrives. Upstream bug #76 drops agy's stdout in non-TTY
+#    contexts, but only while stdin stays an open pipe, so stdin comes from
+#    /dev/null and no PTY is needed. agy_pty_wrapper.py remains the fallback
+#    for platforms where the direct path still returns nothing.
+#
+# 2. agy cannot act. `--mode plan` blocks edits and `--sandbox` restricts
+#    terminal use, so prompt text carrying instructions (review payloads are
+#    untrusted input) cannot turn into tool calls. There is deliberately no
+#    write-enabled path here: babel only ever asks agy for opinions.
+#
+# Runs outside the Claude Code sandbox via sandbox.excludedCommands
+# ("agyask" + "agyask *") — agy needs a localhost bind and, as a Go binary on
+# darwin, cannot verify TLS through the sandbox proxy. Renaming this script
+# means updating that list. See SKILL.md.
+#
+# AGY_PRINT_TIMEOUT is the total budget for the call, in seconds ("150s").
+set -eu
+
+BUDGET="${AGY_PRINT_TIMEOUT:-150s}"
+budget_secs=$(printf '%s' "$BUDGET" | tr -dc '0-9')
+[ -n "$budget_secs" ] || budget_secs=150
+
+started=$(date +%s)
+out=$(agy --mode plan --sandbox --print-timeout "${budget_secs}s" -p "$@" < /dev/null)
+if [ -n "$out" ]; then
+  printf '%s\n' "$out"
+  exit 0
+fi
+
+# Empty output. Fall back to the PTY path only with enough budget left for it to
+# finish — otherwise the caller's Bash timeout kills a fallback that never had a
+# chance, and the failure looks like agy hanging rather than running out of time.
+remaining=$(( budget_secs - ($(date +%s) - started) ))
+if [ "$remaining" -lt 30 ]; then
+  printf 'agyask: no output and only %ss of the %ss budget left — not starting the PTY fallback.\n' \
+    "$remaining" "$budget_secs" >&2
+  exit 2
+fi
+exec python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$@" --timeout "$remaining"
