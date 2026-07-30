@@ -52,7 +52,7 @@ pilot has hit this yet.)
    Output diagnosis JSON only: {diagnosis:str, proposed_fix:str, confidence:high|med|low}. No prose. Do not use any tools — answer directly from the text given above.
    EOF
    )
-   python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 180
+   AGY_PRINT_TIMEOUT=180s agyask "$PROMPT"
    ```
    Bash `timeout: 200000`.
 5. If agy misses too, the lead does one max-depth rethink (ultrathink) — line up

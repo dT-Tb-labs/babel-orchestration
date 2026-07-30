@@ -36,7 +36,7 @@ TaskPacket: {"goal":"independent design for <task summary>. Spec essentials: <su
 Output DesignPacket JSON only, no prose. Do not use any tools — answer directly from the text given above.
 EOF
 )
-python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 180
+AGY_PRINT_TIMEOUT=180s agyask "$PROMPT"
 ```
 
 Use Bash-side `timeout: 200000` alongside (per agy SKILL.md).
@@ -102,7 +102,7 @@ Diff hunk: <paste the changed diff hunks inline>
 Output one JSON array per line: ["<id>","<sev C|H|M|L>","<file>",<line>,"<claim>","<evidence 15-30tok>"]. Example: ["F1","C","auth.py",42,"token expiry unchecked","verify_token() decodes JWT without checking exp claim"]. Output NONE (single word) if clean. No prose. Do not use any tools — answer directly from the text given above.
 EOF
 )
-python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$PROMPT" --timeout 240
+AGY_PRINT_TIMEOUT=240s agyask "$PROMPT"
 ```
 Bash `timeout: 300000` + `run_in_background: true`. A whole-changeset review is heavier than a design request, so agy's timeout is intentionally extended to 240/300000.
 
