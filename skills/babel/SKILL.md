@@ -17,7 +17,7 @@ babel extends superpowers:brainstorming / superpowers:writing-plans / superpower
 | Opus (when not lead) | Hardest verification/judgment | Agent tool model override |
 | Sonnet | Mechanical implementation, parallel exploration, first-pass screening | Agent tool / Workflow |
 | GPT-5.6-SOL | Independent design proposal, Build&Debug partner, when-stuck diagnosis, acceptance review | `node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs"` (tier: checkpoint=quick / design & acceptance=normal / diagnosis & critical acceptance=deep) |
-| agy (Gemini 3) | Third-opinion review, design-debate participant | `python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py"` (in environments where `python3` does not point at a real interpreter — e.g. the Windows WindowsApps stub — substitute `python3.13` or `py -3.13`. See the agy SKILL.md troubleshooting section) |
+| agy (Gemini 3) | Third-opinion review, design-debate participant | `agyask "<prompt>"` (`~/.local/bin/agyask`: direct call, falling back to the PTY wrapper on empty output. `sandbox.excludedCommands` sends it outside the sandbox automatically, so no special flag is needed — see the agy SKILL.md. Timeout via `AGY_PRINT_TIMEOUT=180s`) |
 
 Crew size (2/3/5 members) = independent acceptance tracks + dedicated roles. Mechanical delegation to Sonnet (including Phase 2 implementation and Phase 3 first-pass screening) is allowed at every scale, following the delegation criteria in Cost discipline. When lead=Opus, Opus doubles as the Fable slot and in-Claude verification uses Sonnet + a separate Opus viewpoint — tell the user the L lineup effectively becomes 4 models plus role division.
 

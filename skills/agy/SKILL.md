@@ -13,7 +13,26 @@ Same workflow as `gemini-cli-review`, but launched via CLI binary + PTY wrapper.
 
 `agy -p` **silently drops stdout or hangs on non-TTY (subprocess / pipe / redirect)** ([upstream issue #76](https://github.com/google-antigravity/antigravity-cli/issues/76)). Unfixed as of v1.0.2.
 
-**Implemented workaround:** [`agy_pty_wrapper.py`](agy_pty_wrapper.py) runs agy in a pseudo-terminal so TTY detection and stdout work. It auto-selects **Windows = pywinpty (ConPTY) / Linux and macOS = ptyprocess**, using their identical caller API. Windows is verified (`OK`/`PONG` in ~30s); Unix is statically reviewed but hardware-untested.
+**Workaround A (POSIX, preferred):** redirecting stdin from `/dev/null` makes stdout flush normally without a PTY; #76 drops output only while stdin stays an open pipe. Shim (`~/.local/bin/agyask`, verified on macOS + agy 1.1.8):
+
+```sh
+#!/bin/sh
+out=$(agy --print-timeout "${AGY_PRINT_TIMEOUT:-150s}" -p "$@" < /dev/null)
+if [ -n "$out" ]; then printf '%s\n' "$out"; exit 0; fi
+exec python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$@"
+```
+
+**Run agy outside the Claude Code sandbox.** Three things fail inside it at once: PTY allocation (`out of pty devices`), localhost bind (agy starts a local language server), and TLS verification for this Go binary through the sandbox proxy (`x509: OSStatus -26276`; `SSL_CERT_FILE` does not help because Go on darwin uses Security.framework). Configure it in `~/.claude/settings.json`:
+
+```json
+"sandbox": { "excludedCommands": ["agyask", "agyask *"] }
+```
+
+**`"agyask"` alone is not enough.** `excludedCommands` uses permission-rule syntax: a bare command name matches only the no-argument invocation. The `"agyask *"` entry is what exempts calls carrying a prompt — without it every real call runs sandboxed and hits the three failures above. Renaming the script means updating this list.
+
+The alternative — making agy work *inside* the sandbox — needs `sandbox.enableWeakerNetworkIsolation`, which opens a trustd exfiltration path for **every** sandboxed command. Not worth it for one CLI.
+
+**Workaround B (Windows / fallback):** [`agy_pty_wrapper.py`](agy_pty_wrapper.py) runs agy in a pseudo-terminal so TTY detection and stdout work. It auto-selects **Windows = pywinpty (ConPTY) / Linux and macOS = ptyprocess**, using their identical caller API. Windows is verified (`OK`/`PONG` in ~30s); Unix is statically reviewed but hardware-untested.
 
 ## Prerequisites
 
