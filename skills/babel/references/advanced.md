@@ -16,7 +16,9 @@ blackboard `state.json` round counter + `rejected` list suffices.
   count — not mtime, which moves without the content moving).
   **delta** = the file diff vs the previous snapshot (commit-independent). The exact
   JSON — `cursors.<channel>.{last_seen,snapshot}`, and `rejected[].{reason,cursor}` —
-  is defined in `protocol.md` §5; single-round tasks already write that shape.
+  is defined in `protocol.md` §5. Only L state carries these fields (scale-sized
+  shapes, SKILL.md Phase 0); an S/M task never writes cursors, which is consistent
+  because this whole section fires only at L.
 - **round delta send** (protocol §6 origin): on the next call to a stateless CLI,
   send `diff(snapshot, current)` plus the unresolved finding lines, rejected
   fingerprints, and their rejection reasons. Diff the **snapshot**, not
@@ -24,9 +26,17 @@ blackboard `state.json` round counter + `rejected` list suffices.
   snapshot names which paths moved; the hunks come from `.babel/<task>/snap-r<N>/`,
   which holds a verbatim copy of each changeset file as that round dispatched it,
   under its repo-relative path. The delta is then per moved path
-  `diff -u --strip-trailing-cr .babel/<task>/snap-r<last_seen>/<p> <p>`, with
+  `diff -u --strip-trailing-cr .babel/<task>/snap-r<last_seen>/<p> <p>`
+  (`--strip-trailing-cr` because a repo whose `.gitattributes` normalizes line
+  endings would otherwise report every line as changed), with
   `/dev/null` standing in for whichever side is absent when a path was added or
-  deleted since that round — real source hunks. A channel with no `last_seen` at
+  deleted since that round — real source hunks. The delta is **per channel**, from
+  `snap-r<that channel's last_seen>`: a channel that failed, sat a round out, or
+  was skipped by change-impact routing has an older `last_seen` and needs the
+  wider delta. Write the common case (`last_seen == N`) to
+  `.babel/<task>/inbox/delta-r<N+1>.diff` and give any lagging channel its own
+  `delta-r<N+1>-<channel>.diff` — one shared delta silently omits what the
+  laggard never saw. A channel with no `last_seen` at
   all — never dispatched, or failed on its first call so the pair was never
   committed — has no snapshot to diff against and gets the **full changeset**, not
   a delta. Two things
@@ -148,14 +158,22 @@ export const meta = {
   ],
 }
 
-// Round 1 reviews the changeset; round ≥2 reviews that round's delta instead
-// (SKILL.md Cost discipline) — repoint this before re-running, or every later
-// round re-reads the whole changeset it already reviewed.
-// round ≥2: repoint at this channel's own delta — '.babel/<task>/inbox/delta-r<N>.diff'
-// when the Claude track's last_seen is current, or its '-claude' variant when it lags
-// (patterns.md acceptance-gate). A channel with no last_seen keeps the full changeset.
-const CHANGESET = '.babel/<task>/inbox/changeset.diff'
-const SPEC = '.babel/<task>/spec.md'
+// The lead passes the round's inputs through Workflow `args`; nothing here is
+// hand-edited per round. `diff` is the changeset on round 1 and this channel's own
+// delta from round 2 on — '.babel/<task>/inbox/delta-r<N>.diff', or its '-claude'
+// variant when the Claude track lags; a channel with no last_seen keeps the full
+// changeset (patterns.md acceptance-gate). Fail loudly on a missing arg: a
+// hand-edited constant left pointing at round 1's changeset re-reviews everything
+// the channel already cleared, and does it silently.
+// `diffLines` = changed lines (added+removed), NOT the diff file's wc -l — context
+// lines and headers inflate wc -l 2-3×, which silently promotes a small change into
+// a bigger reviewer bracket. Compute it as:
+//   echo $(( $(grep -Ec '^[+-]' <diff>) - $(grep -Ec '^(\+\+\+|---) ' <diff>) ))
+if (!args || !args.diff || !args.spec || typeof args.diffLines !== 'number') {
+  throw new Error('babel-acceptance-review requires args {diff, spec, diffLines}')
+}
+const CHANGESET = args.diff
+const SPEC = args.spec
 const MAX_FINDINGS = 20   // per dimension group; each one spawns an Opus verifier
 const CONTEXT = `TaskPacket: {"goal":"acceptance review of the changeset","files":[{"path":"${CHANGESET}"},{"path":"${SPEC}"}],"inputs":["${CHANGESET}","${SPEC}"],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
 Read those two paths — they are your only inputs (protocol.md §2 access list). Report in protocol.md's finding-jsonl format: severity(C/H/M/L), file, line, claim, evidence(~10-25 words) required. Exclude speculation and style preferences. Report at most ${MAX_FINDINGS} findings, highest severity first.`
@@ -207,15 +225,20 @@ const LENS = {
   'edge-cases': 'breakage under null/empty/concurrency/retry',
   'spec-compliance': 'divergences from the spec, cited by section ID',
 }
-// Grouping comes from the measured changeset size (patterns.md acceptance-gate
-// step 1). Set GROUPS from the bracket that matches — shipping the template
-// unedited would review a 900-line changeset with a single agent.
 const GROUPS_BY_SIZE = {
   small: [['correctness', 'security', 'edge-cases', 'spec-compliance']],      // <50 lines
   medium: [['correctness', 'edge-cases'], ['security', 'spec-compliance']],   // 50-200
   large: [['correctness'], ['security'], ['edge-cases', 'spec-compliance']],  // >200
 }
-const GROUPS = GROUPS_BY_SIZE.small   // <- replace `.small` with the measured bracket
+// Bracket chosen at run time from the measured diff size (patterns.md
+// acceptance-gate step 1), not hand-set: as a constant it shipped `.small`, which
+// reviews a 900-line changeset with a single agent and reports the round clean.
+// `args.fold` (optional) forces the one-agent shape — the §A9 measured prior for
+// L round 1, and the fold state the bandit may impose on later rounds.
+const GROUPS = args.fold ? GROUPS_BY_SIZE.small
+  : args.diffLines > 200 ? GROUPS_BY_SIZE.large
+  : args.diffLines >= 50 ? GROUPS_BY_SIZE.medium
+  : GROUPS_BY_SIZE.small
 const DIMENSIONS = GROUPS.map(keys => ({
   key: keys.join('+'),
   prompt: `${CONTEXT}\n\ndimensions: ${keys.map(k => `${k} (${LENS[k]})`).join('; ')}`,
@@ -273,9 +296,21 @@ return { confirmed, rejectedCount: verified.length - confirmed.length, unresolve
 ```
 A non-empty `failedDimensions` means that dimension was never reviewed — the round is not a candidate clean round no matter how few findings came back, and the dimension is re-dispatched or declared dropped to the user. A non-empty `unresolved` is a §7 schema-gate failure, not a clean result: re-request that batch once, and if it comes back short again treat the track as degraded for the round (protocol.md §10) rather than reporting those C/H as if nobody found them. At merge time the lead normalizes the Workflow's schema output into finding-jsonl + global ID. Without the Workflow tool, substitute Agent-parallel review for the dimension-split review.
 
+**Launch**: `Workflow({scriptPath, args: {diff, spec, diffLines, fold?}})` — `diff` is the
+path chosen by the round rule in the script's header comment, `diffLines` its
+changed-line count per the header comment (never `wc -l` of the diff file). The
+script cannot know the round — the lead passes `fold: true` per §A9's semantics:
+**on every L round until (a) has earned a grounded `confirmed`** (the measured
+prior; omit only when (a) is the only track), and after that point whenever the
+§A9 bandit folds the (a) track for the coming round. §A9 owns the rule; this
+line only mirrors it. The script is never
+edited between rounds; re-running a round is the same script with different
+`args`, which is also what makes `resumeFromRunId` reusable.
+
 **Declare the verifier ceiling in the crew proposal**: worst case is
 `GROUPS.length × ceil(MAX_FINDINGS / BATCH)` Opus verifiers — 2 with one group, 6
-with three, and only for C/H findings. State the number the user is approving.
+with three, and only for C/H findings. Since `diffLines` fixes `GROUPS` before
+launch, state the exact number the user is approving, not the range.
 
 Measured (this template's own hardening run, 3 acceptance rounds): the pre-batch
 shape — one Opus verifier per finding at every severity, each re-sent the
@@ -311,6 +346,8 @@ Within one task, autonomously adjust channel composition with **no human gate**.
 
 **Sole signal — grounded outcomes**: use only `confirmed`/`refuted` from `state.json.channel_scoreboard` (protocol.md §5), grounded in code/primary sources. Never use subjective lead/LLM evaluation (`protocol.md` §7 invariant).
 
+**Measured prior (round-1 composition)**: the in-Claude (a) track **starts folded** — one agent carrying all four dimensions, the small-bracket shape — regardless of diff size, and expands to its bracket width only after earning a grounded `confirmed`. This prior is a static default for **every L round 1**, not part of the online bandit — it applies even when the ≥3-round firing condition above never fires (an L task expected to converge in one round still starts (a) folded; there is simply no later round for the bandit to adjust). Rationale: on the one instrumented multi-round run, (a) was ~250× below the best channel on `confirmed/token`; full-width round 1 re-pays that measured loss every task just to let the bandit re-learn it. This is an N=1 prior, so it sets only the *starting* width — the fold-reversal rule below governs everything after round 1, and coverage is still guarded because a folded (a) covers all four dimensions in one prompt and the A5 critic checks for uncovered dimensions at every candidate clean round. (This paragraph is not the online loop writing itself into the conventions — it entered via the offline path, cross-task analysis plus the human gate, exactly the route the last paragraph of this section requires.) Degraded modes are exempt: when (a) is the only track (both externals dead, or single-channel minimal mode), it runs at full bracket width from round 1 — there the prior's comparison channel does not exist.
+
 **Adjustment rule (multi-armed bandit, reward = confirmed/token)**: after each round's merge, read the scoreboard to decide the next round's crew composition. Every field this rule needs — per-round `confirmed`/`refuted`, `tokens`, `classes` — is in the `channel_scoreboard` entry the lead appends at merge (protocol.md §5). Early = exploration (fire all channels), late = exploitation.
 - **Drop**: sum the last 2 round entries for a channel; `confirmed=0` and `refuted≥2` → remove it from the next round. Do not pay tokens for only false positives. Applies within the current task only; all channels revive next task.
 - **Fold on reward before dropping on failure**: the drop rule above needs
@@ -334,6 +371,6 @@ Within one task, autonomously adjust channel composition with **no human gate**.
 - **Exploitation (routing bias)**: read `classes` across rounds; if confirmed findings of one defect class concentrate in a channel, make it the priority re-run target of change-impact routing (protocol.md §9). Ties break toward the channel with the higher `confirmed/tokens` ratio, then toward the cheaper channel.
 - **Stretch/shrink**: read with the convergence trend (patterns.md termination condition) — if new C/H keeps declining and all channels skew `refuted`, treat as early convergence and fold the crew composition. While high `confirmed` continues, extend. Whether the round consumes budget is not this rule's call: `budget.rounds_consumed` has exactly one condition, "new C/H did not decrease" (protocol.md §5), and a high-`confirmed` round that still decreased new C/H leaves it untouched by that condition, not by this one. The 8-round hard ceiling on `round` still binds regardless — no scoreboard trend extends past it.
 
-**Grounding-cost discipline** (protocol.md §7): every C/H is eligible and each is grounded once — what the rule bounds is order, agreements first, then differences, then single-lineage — but agreement alone never writes `confirmed`. Ungrounded findings stay out of the scoreboard entirely, so the bandit only ever reads reality-checked labels.
+**Grounding-cost discipline**: as defined in protocol.md §7 — the one consequence that matters here is that ungrounded findings stay out of the scoreboard entirely, so the bandit only ever reads reality-checked labels.
 
 **Observing ensemble value (byproduct)**: the scoreboard records for free which channel earned grounding-confirmed findings. If on some task `confirmed` comes almost entirely from one channel (e.g. Claude introspection), that is direct evidence that — **for that task** — the other channels could not earn their tokens (ablation by observation). This describes one task and is not grounds for a convention change; it revises the crew-composition table only after cross-task offline analysis + a human gate.
