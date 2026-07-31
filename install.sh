@@ -79,7 +79,7 @@ note "babel needs the superpowers skill set + Workflow tool inside Claude Code (
 # cdx-sol (optional): Node + companion + auth
 if command -v node >/dev/null 2>&1; then
   if [ -f "$DEST/cdx-sol/cdx-sol.mjs" ] && node "$DEST/cdx-sol/cdx-sol.mjs" --selftest >/dev/null 2>&1; then
-    ok "cdx-sol channel ready (node + companion + auth)"
+    ok "cdx-sol channel ready (node + companion; --selftest never calls SOL, so auth stays unverified — run 'codex login' if the first real call returns empty)"
   else
     note "cdx-sol present but self-test failed — check Codex CLI install + 'codex login'. Channel will degrade off."
   fi
