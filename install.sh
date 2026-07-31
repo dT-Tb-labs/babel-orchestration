@@ -53,12 +53,14 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
       note "source skill missing: $s (skipped)"
     fi
   done
-  if [ -f "$SRC_DIR/agy/agyask" ]; then
-    mkdir -p "$BIN"
-    cp "$SRC_DIR/agy/agyask" "$BIN/agyask"
-    chmod +x "$BIN/agyask"
-    ok "installed agyask -> $BIN"
-  fi
+  for shim in agy/agyask cdx-sol/solask; do
+    if [ -f "$SRC_DIR/$shim" ]; then
+      mkdir -p "$BIN"
+      cp "$SRC_DIR/$shim" "$BIN/${shim#*/}"
+      chmod +x "$BIN/${shim#*/}"
+      ok "installed ${shim#*/} -> $BIN"
+    fi
+  done
 fi
 
 # ---- self-test ----
@@ -80,6 +82,11 @@ note "babel needs the superpowers skill set + Workflow tool inside Claude Code (
 if command -v node >/dev/null 2>&1; then
   if [ -f "$DEST/cdx-sol/cdx-sol.mjs" ] && node "$DEST/cdx-sol/cdx-sol.mjs" --selftest >/dev/null 2>&1; then
     ok "cdx-sol channel ready (node + companion; --selftest never calls SOL, so auth stays unverified — run 'codex login' if the first real call returns empty)"
+    if command -v solask >/dev/null 2>&1; then
+      note "cdx-sol runs outside the Claude Code sandbox: add \"solask\" AND \"solask *\" to sandbox.excludedCommands in ~/.claude/settings.json (its own sandbox-exec cannot nest inside Claude's). Then call SOL as: solask --tier normal --cwd <repo> \"<prompt>\""
+    else
+      note "solask not on PATH — babel calls SOL through it. Add $BIN to PATH (until then every SOL call needs a per-call sandbox bypass)."
+    fi
   else
     note "cdx-sol present but self-test failed — check Codex CLI install + 'codex login'. Channel will degrade off."
   fi
@@ -90,7 +97,16 @@ fi
 # agy (optional): PTY backend + agy binary
 PYTHON=""
 for c in python3.13 python3 python; do command -v "$c" >/dev/null 2>&1 && { PYTHON="$c"; break; }; done
+AGY_VENV="$HOME/.local/share/babel/agy-venv"
 if [ -n "$PYTHON" ]; then
+  # Prefer a dedicated venv: PEP 668 blocks `pip install` into a system Python, and
+  # the venv lives outside $DEST because installing wipes and recopies that tree.
+  # agyask resolves the same path, falling back to plain python3.
+  if [ ! -x "$AGY_VENV/bin/python3" ]; then
+    "$PYTHON" -m venv "$AGY_VENV" >/dev/null 2>&1 \
+      && "$AGY_VENV/bin/pip" -q install "$PTY_PKG" >/dev/null 2>&1 || true
+  fi
+  [ -x "$AGY_VENV/bin/python3" ] && PYTHON="$AGY_VENV/bin/python3"
   if "$PYTHON" - <<PYEOF >/dev/null 2>&1
 import importlib, sys
 importlib.import_module("winpty" if sys.platform.startswith("win") else "ptyprocess")
@@ -107,7 +123,7 @@ PYEOF
       note "agy binary not found (PATH or known locations) — install agy and sign in by running it interactively once, or pass --agy-path. Channel will degrade off."
     fi
   else
-    note "$PTY_PKG not installed for $PYTHON — run: $PYTHON -m pip install $PTY_PKG (agy channel degrades off)"
+    note "$PTY_PKG unavailable — venv setup at $AGY_VENV failed; run: $PYTHON -m venv \"$AGY_VENV\" && \"$AGY_VENV/bin/pip\" install $PTY_PKG (only the PTY fallback degrades; the direct agy path still works)"
   fi
 else
   note "python not found — agy channel unavailable (babel degrades to fewer channels)"

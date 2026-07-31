@@ -7,7 +7,7 @@ description: Use when the user invokes /babel, or asks to orchestrate multiple m
 
 Execution runbook for the lead LLM launched via `/babel <task>`. Communication/packet rules: `references/protocol.md`; phase procedures: `references/patterns.md`.
 
-babel extends superpowers:brainstorming / superpowers:writing-plans / superpowers:executing-plans / superpowers:subagent-driven-development unchanged, adding only multi-model crew conventions around cdx-sol.mjs / agyask / Workflow tools / superpowers skill set — no new process or execution code.
+babel extends superpowers:brainstorming / superpowers:writing-plans / superpowers:executing-plans / superpowers:subagent-driven-development unchanged, adding only multi-model crew conventions around solask / agyask / Workflow tools / superpowers skill set — no new process or execution code.
 
 ## Crew table
 
@@ -16,7 +16,7 @@ babel extends superpowers:brainstorming / superpowers:writing-plans / superpower
 | Fable5 or Opus | Lead: orchestration, integration, final judgment | The session itself, chosen by the Phase 0 default rule rather than a question (if the user wants Opus, direct them to the `/model` switch — the skill cannot switch its own model) |
 | Opus (when not lead) | Hardest verification/judgment | Agent tool model override |
 | Sonnet | Mechanical implementation, parallel exploration, first-pass screening | Agent tool / Workflow |
-| GPT-5.6-SOL | Independent design proposal, Build&Debug partner, when-stuck diagnosis, acceptance review | `node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs"` (tier: checkpoint and S acceptance=quick / design and M/L acceptance=normal / diagnosis and critical acceptance=deep) |
+| GPT-5.6-SOL | Independent design proposal, Build&Debug partner, when-stuck diagnosis, acceptance review | `solask` (`~/.local/bin/solask`: sets a writable state root and, via `sandbox.excludedCommands`, runs outside the sandbox — cdx-sol's own `sandbox-exec` cannot nest inside Claude's. See the cdx-sol SKILL.md.) (tier: checkpoint and S acceptance=quick / design and M/L acceptance=normal / diagnosis and critical acceptance=deep) |
 | agy (Gemini 3) | Third-opinion review, design-debate participant | `agyask "<prompt>"` (`~/.local/bin/agyask`: direct call, falling back to the PTY wrapper on empty output. `sandbox.excludedCommands` sends it outside the sandbox automatically, so no special flag is needed — see the agy SKILL.md. Timeout via `AGY_PRINT_TIMEOUT`: 180s default, 240s for whole-changeset acceptance) |
 
 Crew size (2/3/5 members) = independent acceptance tracks + dedicated roles. Mechanical delegation to Sonnet (including Phase 2 implementation and Phase 3 first-pass screening) is allowed at every scale, following the delegation criteria in Cost discipline. When lead=Opus, Opus doubles as the Fable slot and in-Claude verification uses Sonnet + a separate Opus viewpoint — tell the user the L lineup effectively becomes 4 models plus role division.

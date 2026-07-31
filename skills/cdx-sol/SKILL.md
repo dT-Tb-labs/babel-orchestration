@@ -10,8 +10,10 @@ Send a task to GPT-5.6-SOL through the local Codex subscription. Use for second-
 ## Invoke
 
 ```bash
-node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier <quick|normal|deep> --cwd "<repo-abs-path>" "<prompt>"
+solask --tier <quick|normal|deep> --cwd "<repo-abs-path>" "<prompt>"
 ```
+
+`solask` (`~/.local/bin/solask`, installed by `install.sh`) is a thin shim over `cdx-sol.mjs` that exists for two reasons, both fatal without it inside Claude Code: it points `CLAUDE_PLUGIN_DATA` at a writable state root, since the default `~/.claude/plugins/data` is on the sandbox deny list and the job dies with `EPERM ... /jobs/task-*.log`; and it is a distinct command name that `sandbox.excludedCommands` (`"solask"` **and** `"solask *"` — the bare name matches only argument-less calls) can send outside the sandbox, because cdx-sol shells out to `sandbox-exec` and that cannot nest inside Claude's own sandbox (`sandbox_apply: Operation not permitted` on every workspace read). SOL's read-only sandbox is unaffected; only the wrapper moves. Calling `node .../cdx-sol.mjs` directly still works outside Claude Code.
 
 Use Bash tool `timeout: 600000` (10 min). The wrapper launches a background Codex job, polls internally, and prints only SOL's final answer — one round-trip, no progress spam. Read-only sandbox by default.
 
@@ -38,7 +40,7 @@ Three levers, all applied by default:
 If the wrapper prints `SOL_STILL_RUNNING <jobId>`, the job is alive and detached. Resume waiting in a later turn:
 
 ```bash
-node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --attach <jobId> --cwd "<repo-abs-path>"
+solask --attach <jobId> --cwd "<repo-abs-path>"
 ```
 
 ## Write mode (gated)
