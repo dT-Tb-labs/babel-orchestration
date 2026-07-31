@@ -105,11 +105,29 @@ shim already does. That is three global relaxations to sandbox one CLI, which is
 why `agyask` + `excludedCommands` remains this repo's default — see the README
 section "What the sandbox exclusion costs you".
 
-## Untested
+## Can the grant be abused to install a root CA?
 
-Whether a sandboxed process can *write* user trust settings through the agent —
-installing a root CA, and so setting up later interception — is not tested here.
-It is the question to answer before calling the grant harmless.
+The obvious worry is that a process allowed to reach the trust agent could also
+*write* trust settings — install its own root and set up later interception.
+Tested with a throwaway self-signed cert and `security add-trusted-cert -r
+trustRoot`, user domain:
+
+| where | result |
+|---|---|
+| outside the sandbox | blocks on a **SecurityAgent authorization dialog** — a human has to approve |
+| inside the narrow profile (only `trustd.agent` allowed) | fails immediately, no dialog, nothing written |
+
+Nothing landed in the trust store in either case. So the grant does not enable a
+silent root-CA install: the write path goes through interactive authorization,
+and inside the sandbox that path is not reachable at all. The in-sandbox failure
+surfaces as `SecTrustSettingsSetTrustSettings: errSecParam`, which is an odd code
+for "no authorization path", so treat the *mechanism* as unconfirmed — the
+*behaviour*, no prompt and no write, is what was measured.
+
+Still worth stating plainly: this was tested on the narrow hand-written profile.
+Under Claude Code's real profile, which allows `com.apple.SecurityServer` and
+`com.apple.securityd.xpc` unconditionally, a dialog may well appear instead. A
+dialog is still not a silent compromise.
 
 ## Reproducing
 
