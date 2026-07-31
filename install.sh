@@ -118,7 +118,7 @@ PYEOF
       else
         note "agyask not on PATH — babel calls agy through it. Add $BIN to PATH (channel degrades off until then)."
       fi
-      note "agy runs outside the Claude Code sandbox: add \"agyask\" AND \"agyask *\" to sandbox.excludedCommands in ~/.claude/settings.json (the bare name alone only matches argument-less calls). An excluded command runs unsandboxed — read the shim and README 'What the sandbox exclusion costs you' first, or skip it and let the channel degrade off."
+      note "agy runs outside the Claude Code sandbox: add \"agyask\" AND \"agyask *\" to sandbox.excludedCommands in ~/.claude/settings.json (list both forms: on Claude Code 2.1.220 either alone works, but the docs use the wildcard form in one place and bare names in another, so the pair is free insurance). An excluded command runs unsandboxed — read the shim and README 'What the sandbox exclusion costs you' first, or skip it and let the channel degrade off."
     else
       note "agy binary not found (PATH or known locations) — install agy and sign in by running it interactively once, or pass --agy-path. Channel will degrade off."
     fi

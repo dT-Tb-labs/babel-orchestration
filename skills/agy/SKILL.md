@@ -29,7 +29,9 @@ AGY_PRINT_TIMEOUT=180s agyask "<prompt>"
 "sandbox": { "excludedCommands": ["agyask", "agyask *"] }
 ```
 
-**`"agyask"` alone is not enough.** `excludedCommands` uses permission-rule syntax: a bare command name matches only the no-argument invocation. The `"agyask *"` entry is what exempts calls carrying a prompt — without it every real call runs sandboxed and hits the three failures above. Renaming the script means updating this list.
+**Why both entries.** Measured on Claude Code 2.1.220, either form alone is enough: with only `"agyask"`, calls carrying a prompt and calls with an `AGY_PRINT_TIMEOUT=…` prefix both ran outside the sandbox, and with only `"agyask *"` the argument-less call did too. Both are listed because the official troubleshooting guidance uses the wildcard form (`docker *`) while the settings reference shows bare names, the matching rule is documented nowhere, and several open reports describe `excludedCommands` not taking effect — so the pair costs nothing and does not depend on which reading is right. Renaming the script means updating this list.
+
+An earlier version of this file claimed the bare name matches only argument-less calls. That does not reproduce on 2.1.220; the claim came from a confounded observation and has been withdrawn.
 
 The alternative — making agy work *inside* the sandbox — needs `sandbox.enableWeakerNetworkIsolation`, which opens a trustd exfiltration path for **every** sandboxed command. Not worth it for one CLI.
 
