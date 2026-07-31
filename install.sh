@@ -83,7 +83,7 @@ if command -v node >/dev/null 2>&1; then
   if [ -f "$DEST/cdx-sol/cdx-sol.mjs" ] && node "$DEST/cdx-sol/cdx-sol.mjs" --selftest >/dev/null 2>&1; then
     ok "cdx-sol channel ready (node + companion; --selftest never calls SOL, so auth stays unverified — run 'codex login' if the first real call returns empty)"
     if command -v solask >/dev/null 2>&1; then
-      note "cdx-sol runs outside the Claude Code sandbox: add \"solask\" AND \"solask *\" to sandbox.excludedCommands in ~/.claude/settings.json (its own sandbox-exec cannot nest inside Claude's). Then call SOL as: solask --tier normal --cwd <repo> \"<prompt>\""
+      note "cdx-sol runs outside the Claude Code sandbox: add \"solask\" AND \"solask *\" to sandbox.excludedCommands in ~/.claude/settings.json (its own sandbox-exec cannot nest inside Claude's). An excluded command runs unsandboxed — read the shim and README 'What the sandbox exclusion costs you' first, or skip it and let the channel degrade off. Then call SOL as: solask --tier normal --cwd <repo> \"<prompt>\""
     else
       note "solask not on PATH — babel calls SOL through it. Add $BIN to PATH (until then every SOL call needs a per-call sandbox bypass)."
     fi
@@ -118,7 +118,7 @@ PYEOF
       else
         note "agyask not on PATH — babel calls agy through it. Add $BIN to PATH (channel degrades off until then)."
       fi
-      note "agy runs outside the Claude Code sandbox: add \"agyask\" AND \"agyask *\" to sandbox.excludedCommands in ~/.claude/settings.json (the bare name alone only matches argument-less calls)"
+      note "agy runs outside the Claude Code sandbox: add \"agyask\" AND \"agyask *\" to sandbox.excludedCommands in ~/.claude/settings.json (the bare name alone only matches argument-less calls). An excluded command runs unsandboxed — read the shim and README 'What the sandbox exclusion costs you' first, or skip it and let the channel degrade off."
     else
       note "agy binary not found (PATH or known locations) — install agy and sign in by running it interactively once, or pass --agy-path. Channel will degrade off."
     fi

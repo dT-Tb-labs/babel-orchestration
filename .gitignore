@@ -12,3 +12,6 @@ node_modules/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local working log (per-project memory, not a deliverable)
+memory.md
