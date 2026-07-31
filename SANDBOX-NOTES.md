@@ -1,9 +1,11 @@
-# Why Go CLIs fail inside Claude Code's sandbox on macOS
+# Go CLIs and TLS inside Claude Code's macOS sandbox
 
-Measured on macOS 26 (Darwin 25.5.0), Claude Code 2.1.220, `gh` 2.x (Homebrew),
-`agy` 1.1.8. Everything below is an A/B run, not a reading of the source.
+Measured on macOS 26 (Darwin 25.5.0), Claude Code 2.1.220, `gh` 2.x, `agy` 1.1.8.
+Every claim below is either an A/B run or a line of
+[`sandbox-runtime`](https://github.com/anthropic-experimental/sandbox-runtime)
+source, not inference.
 
-## The symptom
+## Symptom
 
 Any Go binary doing TLS inside the sandbox fails:
 
@@ -11,101 +13,103 @@ Any Go binary doing TLS inside the sandbox fails:
 Get "https://api.github.com/rate_limit": tls: failed to verify certificate: x509: OSStatus -26276
 ```
 
-`curl` to the same host from the same sandbox succeeds, so this is not the
-domain allowlist and not the network proxy — it is specific to Go.
+`curl` to the same host from the same sandbox returns normally, so this is
+neither the domain allowlist nor the proxy — it is specific to Go.
 
-## The mechanism
+## Mechanism
 
-Go's `crypto/x509` on macOS calls `SecTrustEvaluateWithError()`, which evaluates
-the chain by talking to a trust daemon over Mach IPC. Deny that Mach lookup and
-the evaluation aborts with `errSecInternalComponent` (`OSStatus -26276`) — the
-chain is never judged invalid, it is never judged at all. `SSL_CERT_FILE` cannot
-help, because the failure is in the IPC, not in the root store.
+Go's `crypto/x509` on macOS evaluates chains with `SecTrustEvaluateWithError()`,
+which reaches the trust agent over Mach IPC. Deny that lookup and evaluation
+aborts with `errSecInternalComponent` (`OSStatus -26276`): the chain is not
+judged invalid, it is never judged at all. `SSL_CERT_FILE` cannot help, because
+the failure is in the IPC and not in the root store.
 
-This much was already diagnosed in
+Already diagnosed in
 [anthropics/claude-code#34876](https://github.com/anthropics/claude-code/issues/34876)
-(closed as not planned, no maintainer response). That issue proposes a one-line
-fix:
+(closed as not planned). That issue proposes allowing `com.apple.trustd`.
 
-```scheme
-(allow mach-lookup (global-name "com.apple.trustd"))
-```
-
-**That name is the wrong one.** It does not restore TLS.
-
-## Which Mach service is actually required
-
-Reproduce with `sandbox-exec` directly — a profile of `(allow default)` plus one
-`deny` isolates a single variable:
+**That is the wrong service name.** Isolated with `sandbox-exec`, one variable
+per profile over `(allow default)`:
 
 | profile | `gh api rate_limit` |
 |---|---|
-| `(deny mach-lookup (global-name "com.apple.trustd"))` | works |
-| `(deny mach-lookup (global-name "com.apple.trustd.agent"))` | **`OSStatus -26276`** |
-| `(deny mach-lookup)` | **`OSStatus -26276`** |
-| `(deny mach-lookup)` + allow `com.apple.trustd` | **`OSStatus -26276`** |
-| `(deny mach-lookup)` + allow `com.apple.trustd.agent` | works |
-| `(deny mach-lookup)` + allow both | works |
+| deny `com.apple.trustd` | works |
+| deny `com.apple.trustd.agent` | **`OSStatus -26276`** |
+| deny all mach-lookup | **`OSStatus -26276`** |
+| deny all, allow `com.apple.trustd` | **`OSStatus -26276`** |
+| deny all, allow `com.apple.trustd.agent` | works |
 
-**`com.apple.trustd.agent` is necessary and sufficient. `com.apple.trustd` is
-neither.** Denying only `com.apple.trustd` changes nothing, because the
-per-user agent still answers.
+`com.apple.trustd.agent` is necessary and sufficient; denying `com.apple.trustd`
+changes nothing because the per-user agent still answers. The upstream library
+already uses the correct name — only the issue's proposed one-liner is wrong.
 
-Minimal profile that restores Go TLS with every other Mach lookup denied:
+## What the setting actually does
 
-```scheme
-(version 1)
-(allow default)
-(deny mach-lookup)
+In `sandbox-runtime`'s `macos-sandbox-utils.ts`, `enableWeakerNetworkIsolation`
+has exactly one effect on the generated profile:
+
+```
+; trustd.agent - needed for Go TLS certificate verification (weaker network isolation)
 (allow mach-lookup (global-name "com.apple.trustd.agent"))
 ```
 
-## TLS is not the whole story for every CLI
+That is the whole of it on macOS. **The name oversells the grant**: it opens no
+port, no host, and no file — it lets the OS evaluate a certificate. The
+"network" framing presumably refers to trustd's own OCSP/CRL fetches being a
+theoretical low-bandwidth side channel, which is worth knowing but is not what
+the name suggests.
 
-`gh` reads its token from a config file, so trust evaluation was its only Mach
-dependency. `agy` reads credentials from the keychain, and under the profile
-above it silently falls back to an interactive OAuth login instead of failing
-loudly. Adding the keychain services fixes it:
+Two related things the same file settles:
 
-```scheme
-(version 1)
-(allow default)
-(deny mach-lookup)
-(allow mach-lookup (global-name "com.apple.trustd.agent"))
-(allow mach-lookup (global-name "com.apple.SecurityServer"))
-(allow mach-lookup (global-name "com.apple.secinitd"))
-```
+- `com.apple.SecurityServer` is allowed **unconditionally**, so keychain access
+  is not gated by this flag. (An earlier version of this note claimed otherwise,
+  from an over-strict hand-written test profile rather than the real one.)
+- The library also accepts `allowMachLookup`, an arbitrary list of Mach services
+  with wildcard support — the precise, general escape hatch.
 
-With that, `agy --mode plan --sandbox -p "…" < /dev/null` returns its answer
-from inside the sandbox. (Not minimized further — one of the two keychain names
-may be redundant.)
+## State on Claude Code 2.1.220
 
-## What this costs, honestly
+| setting in `~/.claude/settings.json` | effect on `gh` in the sandbox |
+|---|---|
+| `sandbox.enableWeakerNetworkIsolation: true` | **works** — the flag is wired |
+| `sandbox.allowMachLookup: ["com.apple.trustd.agent"]` | **no effect** — not honoured |
 
-`com.apple.trustd.agent` grants certificate trust evaluation. Whether a
-sandboxed process can also *write* user trust settings through it — installing a
-root CA and thereby setting up later interception — is **untested here**, and it
-is the risk to check before treating this as safe.
+So [#28954](https://github.com/anthropics/claude-code/issues/28954), which
+reports `enableWeakerNetworkIsolation` as not wired through, no longer
+reproduces here. The remaining gap is `allowMachLookup`: the library supports it,
+the CLI does not pass it through, and it is the one that would let a user grant
+exactly `com.apple.trustd.agent` and nothing else.
 
-The keychain services are a different matter and much less comfortable:
-`com.apple.SecurityServer` is how a process reaches the user's keychain. Granting
-it to run one CLI hands that CLI, and anything it executes, the credential store.
-Do not add it casually; the TLS-only grant is the one worth having.
+## Which workaround to prefer
 
-Compare with what Claude Code offers today:
+For a Go CLI that only needs TLS — `gh`, `terraform`, `tofu`, `gcloud` —
+`enableWeakerNetworkIsolation: true` is **narrower than `excludedCommands`**,
+despite the scarier name. Compare what each grants:
 
-- **`excludedCommands`** — the command runs with no sandbox at all. Strictly
-  broader than one Mach service.
-- **`enableWeakerNetworkIsolation`** — per the official docs, the remedy when
-  using a MITM proxy with a custom CA; it relaxes the boundary for *every*
-  sandboxed command, not just the Go one.
+| | grant | scope |
+|---|---|---|
+| `enableWeakerNetworkIsolation` | one Mach service | every sandboxed command |
+| `excludedCommands` | no sandbox at all | the named commands |
 
-So the narrow grant is better than both. It is also not reachable: Claude Code's
-sandbox settings expose `allowUnixSockets`, but nothing for Mach lookups, so
-there is no way to ask for it from `settings.json`. Until there is,
-`excludedCommands` on a small named shim — which is what this repo does for
-`agyask` and `solask` — stays the practical answer, and the README section
-"What the sandbox exclusion costs you" describes what that gives up.
+Neither dominates: one is a tiny grant applied broadly, the other a total grant
+applied narrowly. For trust evaluation specifically the first looks like the
+better trade, and it is the one this repo would use if the tools involved needed
+nothing else.
+
+`agy` needs more than TLS. With the trustd grant active it gets past the
+certificate error and then fails on `listen tcp 127.0.0.1:0: bind: operation not
+permitted` — it starts a local language server. Running it fully sandboxed would
+take `enableWeakerNetworkIsolation` **plus** `network.allowLocalBinding`, plus
+its Google domains in `allowedDomains`, plus the `< /dev/null` stdin detach the
+shim already does. That is three global relaxations to sandbox one CLI, which is
+why `agyask` + `excludedCommands` remains this repo's default — see the README
+section "What the sandbox exclusion costs you".
+
+## Untested
+
+Whether a sandboxed process can *write* user trust settings through the agent —
+installing a root CA, and so setting up later interception — is not tested here.
+It is the question to answer before calling the grant harmless.
 
 ## Reproducing
 
@@ -126,5 +130,5 @@ EOF
 sandbox-exec -f /tmp/allow.sb gh api rate_limit   # works
 ```
 
-`sandbox-exec` is deprecated but still present, and it cannot be nested inside
-Claude Code's own sandbox — run these from a plain terminal.
+`sandbox-exec` is deprecated but present, and cannot nest inside Claude Code's
+own sandbox — run these from a plain terminal.
