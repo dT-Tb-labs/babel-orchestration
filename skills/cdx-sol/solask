@@ -1,0 +1,26 @@
+#!/bin/sh
+# solask — the normal way to call cdx-sol from inside Claude Code.
+#
+# Installed to ~/.local/bin by install.sh. Two things it guarantees:
+#
+# 1. The job can write its state. codex-companion's default state root
+#    (~/.claude/plugins/data) is on the sandbox deny list, so a plain call dies
+#    with "EPERM: operation not permitted, open .../jobs/task-*.log" before SOL is
+#    ever reached. CLAUDE_PLUGIN_DATA moves it somewhere writable.
+#
+# 2. It has a distinct command name, so sandbox.excludedCommands can send it
+#    outside the sandbox. cdx-sol shells out to sandbox-exec for its own read-only
+#    sandbox, and that cannot nest inside Claude Code's sandbox — every workspace
+#    read fails with "sandbox_apply: Operation not permitted". SOL's own read-only
+#    sandbox still applies; what moves is only where the wrapper runs.
+#
+# Runs outside the Claude Code sandbox via sandbox.excludedCommands
+# ("solask" + "solask *"). Renaming this script means updating that list.
+# See SKILL.md.
+set -eu
+
+: "${CLAUDE_PLUGIN_DATA:=$HOME/.local/state/babel/codex-inline}"
+export CLAUDE_PLUGIN_DATA
+mkdir -p "$CLAUDE_PLUGIN_DATA"
+
+exec node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" "$@"

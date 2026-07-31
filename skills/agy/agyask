@@ -46,4 +46,8 @@ if [ "$remaining" -lt 30 ]; then
     "$remaining" "$budget_secs" >&2
   exit 2
 fi
-exec python3 "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$@" --timeout "$remaining"
+# The wrapper needs ptyprocess, which PEP 668 blocks from a system pip. install.sh
+# puts it in a venv outside the skills tree, since installing wipes and recopies that.
+PY="$HOME/.local/share/babel/agy-venv/bin/python3"
+[ -x "$PY" ] || PY=python3
+exec "$PY" "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$@" --timeout "$remaining"

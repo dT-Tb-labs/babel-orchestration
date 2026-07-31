@@ -20,7 +20,7 @@ Used in Phase 1 (design). Run only when triage classifies the task as M/L. For S
 Write the payload to `.babel/<task>/inbox/design-req.json` and have SOL read it via `--cwd` (protocol.md §3, to avoid the argv limit). Do not use protocol.md pointers with SOL; embed the output format inline each time (protocol.md §11).
 
 ```bash
-node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON."
+solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON."
 ```
 
 - `--tier normal` (normal for design, deep for diagnosis/critical acceptance).
@@ -97,7 +97,7 @@ Run correctness / security / edge-cases / spec-compliance through `pipeline()` i
 
 ### (b)(c) template
 
-(c) SOL: write the TaskPacket to `.babel/<task>/inbox/accept-r<N>.json` (argv avoidance, protocol.md §3) and point SOL at it. **Round 1 names `changeset.diff`; from round 2 on, name SOL's own delta** — `delta-r<N>.diff`, or its `-sol` variant if SOL lagged a round — since re-sending the whole changeset re-reviews what it already cleared. Same for (b) agy below, and for the Claude template (`advanced.md` §A6). The packet must name the diff itself, not just the file list — a list of paths sends SOL to read current file contents, which after a later fix is no longer the changeset that was reviewed:
+(c) SOL: write the TaskPacket to `.babel/<task>/inbox/accept-r<N>.json` (argv avoidance, protocol.md §3) and point SOL at it. **Round 1 names `changeset.diff`; from round 2 on, name SOL's own delta** — `delta-r<N>.diff`, or its `-sol` variant if SOL lagged a round — since re-sending the whole changeset re-reviews what it already cleared. The exception is a channel with no `last_seen`, one that has never returned a clean result: it has no snapshot to diff from and gets the full changeset regardless of round (`advanced.md` §A1). Same for (b) agy below, and for the Claude template (`advanced.md` §A6). The packet must name the diff itself, not just the file list — a list of paths sends SOL to read current file contents, which after a later fix is no longer the changeset that was reviewed:
 ```json
 {"goal":"full review of changeset",
  "files":[{"path":".babel/<task>/inbox/changeset.diff"},{"path":".babel/<task>/spec.md"}],
@@ -105,7 +105,7 @@ Run correctness / security / edge-cases / spec-compliance through `pipeline()` i
  "criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
 ```
 ```bash
-node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
+solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
 ```
 Bash `timeout: 600000` + `run_in_background: true`. For critical acceptance of a security/irreversible L task, swap in `--tier deep` (see the cost discipline in SKILL.md).
 
