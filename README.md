@@ -139,6 +139,13 @@ Both shims are ~30 lines and worth reading before you exempt them.
 designed to degrade (see the degradation table in `protocol.md` §10) and runs
 first-class with Claude alone, at reduced independence.
 
+**Why the exclusion is needed at all**, and what a narrower fix would look like
+if Claude Code exposed one, is measured in
+[SANDBOX-NOTES.md](SANDBOX-NOTES.md): Go binaries fail TLS inside the sandbox
+because the Mach lookup for macOS's trust-evaluation agent is denied, and a
+single `mach-lookup` grant for `com.apple.trustd.agent` restores it — a much
+smaller hole than excluding the command. There is no settings key for it today.
+
 ## Status
 
 The three skill files are self-contained and carry empirical tuning from two
