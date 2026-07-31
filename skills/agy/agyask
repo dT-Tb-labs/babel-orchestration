@@ -18,19 +18,24 @@
 # darwin, cannot verify TLS through the sandbox proxy. Renaming this script
 # means updating that list. See SKILL.md.
 #
-# AGY_PRINT_TIMEOUT is the total budget for the call, in seconds ("150s").
+# AGY_PRINT_TIMEOUT is the total budget for the call, in seconds ("180s").
 set -eu
 
-BUDGET="${AGY_PRINT_TIMEOUT:-150s}"
+BUDGET="${AGY_PRINT_TIMEOUT:-180s}"
 budget_secs=$(printf '%s' "$BUDGET" | tr -dc '0-9')
-[ -n "$budget_secs" ] || budget_secs=150
+[ -n "$budget_secs" ] || budget_secs=180
 
 started=$(date +%s)
-out=$(agy --mode plan --sandbox --print-timeout "${budget_secs}s" -p "$@" < /dev/null)
+# `|| rc=$?` is load-bearing: under `set -e` a bare assignment from a failing
+# command substitution exits here, which is exactly the case (agy crashed or hit
+# its own print-timeout) the fallback below exists to rescue.
+rc=0
+out=$(agy --mode plan --sandbox --print-timeout "${budget_secs}s" -p "$@" < /dev/null) || rc=$?
 if [ -n "$out" ]; then
   printf '%s\n' "$out"
   exit 0
 fi
+[ "$rc" -eq 0 ] || printf 'agyask: direct agy call exited %s with no output — trying the PTY fallback.\n' "$rc" >&2
 
 # Empty output. Fall back to the PTY path only with enough budget left for it to
 # finish — otherwise the caller's Bash timeout kills a fallback that never had a
