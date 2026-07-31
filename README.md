@@ -104,7 +104,40 @@ Then invoke from Claude Code:
   hits.
 - SOL/agy write access is gated behind explicit user approval (`--allow-write`).
 - Reproduction commands are reviewed by the lead before running (no sandbox
-  assumption).
+  assumption). A repro that came from an external channel is re-authored by the
+  lead rather than run as received — pasting an external model's command into a
+  shell would be executing its output.
+
+### What the sandbox exclusion costs you
+
+Both optional channels ask you to add a command to `sandbox.excludedCommands` in
+`~/.claude/settings.json` (`"agyask"` + `"agyask *"`, `"solask"` + `"solask *"`).
+That is a real hole in Claude Code's sandbox and you should decide about it
+deliberately, so here is the whole trade:
+
+**Why it is needed.** Neither CLI can run *inside* the sandbox. `cdx-sol` shells
+out to `sandbox-exec` for its own read-only sandbox, and that cannot nest — every
+workspace read fails with `sandbox_apply: Operation not permitted`. `agy` needs a
+localhost bind for its language server and, as a Go binary on darwin, verifies TLS
+through Security.framework, which the sandbox proxy breaks. The alternatives are
+worse: `enableWeakerNetworkIsolation` opens an exfiltration path for *every*
+sandboxed command, and a per-call bypass flag is a decision you would re-make,
+and eventually mis-make, on every invocation.
+
+**What you actually give up.** Only the wrapper process leaves the sandbox — an
+excluded command runs with your normal filesystem and network access. Anything
+able to invoke `agyask` or `solask` inherits that, which matters because review
+payloads are untrusted input.
+
+**What still constrains them.** `agyask` pins `--mode plan --sandbox`, so agy
+cannot edit files or run commands even when a reviewed hunk contains text aimed
+at it. `solask` changes only where the wrapper runs; SOL's own read-only sandbox
+is untouched, and write mode stays behind explicit `--allow-write` approval.
+Both shims are ~30 lines and worth reading before you exempt them.
+
+**If you would rather not.** Skip the exclusion and drop that channel — babel is
+designed to degrade (see the degradation table in `protocol.md` §10) and runs
+first-class with Claude alone, at reduced independence.
 
 ## Status
 

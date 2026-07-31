@@ -33,6 +33,8 @@ AGY_PRINT_TIMEOUT=180s agyask "<prompt>"
 
 The alternative — making agy work *inside* the sandbox — needs `sandbox.enableWeakerNetworkIsolation`, which opens a trustd exfiltration path for **every** sandboxed command. Not worth it for one CLI.
 
+**Know what you are exempting.** An excluded command runs with your normal filesystem and network access, and anything that can invoke `agyask` inherits that. What keeps it safe is the shim itself: `--mode plan --sandbox` is pinned, so agy cannot edit or execute regardless of what a reviewed hunk asks for, and there is no write-enabled path to reach. Read the ~30-line script before exempting it, and if you would rather not, drop the channel — babel degrades to the 2-track gate (`protocol.md` §10). Full trade-off: README §"What the sandbox exclusion costs you".
+
 **Workaround B (Windows / fallback):** [`agy_pty_wrapper.py`](agy_pty_wrapper.py) runs agy in a pseudo-terminal so TTY detection and stdout work. It auto-selects **Windows = pywinpty (ConPTY) / Linux and macOS = ptyprocess**, using their identical caller API. Windows is verified (`OK`/`PONG` in ~30s); Unix is statically reviewed but hardware-untested.
 
 ## Prerequisites
