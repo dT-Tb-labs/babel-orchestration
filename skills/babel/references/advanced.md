@@ -13,7 +13,9 @@ keep no memory between calls. Single/low-round tasks (most S/M) skip this — th
 blackboard `state.json` round counter + `rejected` list suffices.
 
 - **cursor** = a lead-recorded snapshot (file list + per-file hash or mtime+size).
-  **delta** = the file diff vs the previous snapshot (commit-independent).
+  **delta** = the file diff vs the previous snapshot (commit-independent). The exact
+  JSON — `cursors.<channel>.{last_seen,snapshot}`, and `rejected[].{reason,cursor}` —
+  is defined in `protocol.md` §5; single-round tasks already write that shape.
 - **round delta send** (protocol §6 origin): on the next call to a stateless CLI,
   send `diff(last_seen, current)` plus the unresolved finding lines, rejected
   fingerprints, and their rejection reasons. Never send an ID alone — a stateless
@@ -65,6 +67,20 @@ For multi-milestone tasks, verify each milestone before the next. Skip when the
 milestone diff equals the whole final changeset — fold it into the single Phase 3
 acceptance call to avoid double-firing the same target.
 
+First write both files the command below reads — the milestone diff, and the
+packet pointing at it:
+
+```bash
+git diff <previous milestone ref> > .babel/<task>/inbox/checkpoint-r<N>.diff
+```
+```json
+{"goal":"spec-drift and bug check at milestone <N>",
+ "files":[{"path":".babel/<task>/inbox/checkpoint-r<N>.diff"}],
+ "inputs":[".babel/<task>/spec.md"],
+ "criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
+```
+written to `.babel/<task>/inbox/checkpoint-r<N>.json`, then:
+
 ```bash
 node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier quick --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/checkpoint-r<N>.json. Read that file and the referenced diff. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
 ```
@@ -80,7 +96,23 @@ arbitration to the domain-strongest model instead of deciding itself: algorithmi
 ## A5. completeness critic (L acceptance)
 
 A final agent asking one fixed question: "what dimension is uncovered, what claim
-unverified, what file unread?" What it surfaces seeds the next round. L-only.
+unverified, what file unread?" What it surfaces seeds the next round. L-only, and
+it runs after **every** candidate clean round — including a clean round 1, where
+an uncovered dimension is the likeliest explanation for finding nothing.
+
+Run it as one Opus agent (`effort: 'high'`), given the changeset diff path, the
+spec path, the round's merged findings, and the list of dimensions/reviewers that
+actually ran:
+
+```
+schema: {gaps: [{kind: 'dimension'|'claim'|'file', what: str, why_it_matters: str}]}
+```
+
+**Empty means `gaps: []`.** A critic that returns prose, or gaps whose `what`
+names something already covered by a reviewer that ran, does not count as empty —
+re-request once (protocol.md §7 schema gate), and on a second failure treat the
+round as non-converged and run another round. Non-empty gaps become the next
+round's dimensions.
 
 ## A6. Claude adversarial Workflow — full template
 
@@ -97,14 +129,18 @@ export const meta = {
   ],
 }
 
-const CHANGESET = '<changeset diff file path or file list>'
-const CONTEXT = `Target: ${CHANGESET}. Report in protocol.md's finding-jsonl format. severity(C/H/M/L), file, line, claim, evidence(15-30tok) required. Exclude speculation and style preferences.`
+const CHANGESET = '.babel/<task>/inbox/changeset.diff'
+const SPEC = '.babel/<task>/spec.md'
+const MAX_FINDINGS = 20   // per dimension group; each one spawns an Opus verifier
+const CONTEXT = `TaskPacket: {"goal":"acceptance review of the changeset","files":[{"path":"${CHANGESET}"},{"path":"${SPEC}"}],"inputs":["${CHANGESET}","${SPEC}"],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
+Read those two paths — they are your only inputs (protocol.md §2 access list). Report in protocol.md's finding-jsonl format: severity(C/H/M/L), file, line, claim, evidence(~10-25 words) required. Exclude speculation and style preferences. Report at most ${MAX_FINDINGS} findings, highest severity first.`
 
 const FINDING_SCHEMA = {
   type: 'object',
   properties: {
     findings: {
       type: 'array',
+      maxItems: MAX_FINDINGS,
       items: {
         type: 'object',
         properties: {
@@ -127,12 +163,19 @@ const VERDICT_SCHEMA = {
   required: ['real', 'reason'],
 }
 
-const DIMENSIONS = [
-  { key: 'correctness', prompt: `${CONTEXT}\n\ndimension: correctness. Hunt for logic errors, boundary values, type mismatches.` },
-  { key: 'security', prompt: `${CONTEXT}\n\ndimension: security. Hunt for injection, authentication, secret exposure.` },
-  { key: 'edge-cases', prompt: `${CONTEXT}\n\ndimension: edge-cases. Hunt for breakage under null/empty/concurrency/retry.` },
-  { key: 'spec-compliance', prompt: `${CONTEXT}\n\ndimension: spec compliance. Point out divergences with spec.md section-ID references.` },
-]
+const LENS = {
+  correctness: 'logic errors, boundary values, type mismatches',
+  security: 'injection, authentication, secret exposure',
+  'edge-cases': 'breakage under null/empty/concurrency/retry',
+  'spec-compliance': 'divergences from the spec, cited by section ID',
+}
+// Grouping comes from the changeset size (patterns.md acceptance-gate step 1):
+// <50 lines -> one group of all four; 50-200 -> two groups; >200 -> three.
+const GROUPS = [['correctness', 'security', 'edge-cases', 'spec-compliance']]
+const DIMENSIONS = GROUPS.map(keys => ({
+  key: keys.join('+'),
+  prompt: `${CONTEXT}\n\ndimensions: ${keys.map(k => `${k} (${LENS[k]})`).join('; ')}`,
+}))
 
 phase('Review')
 const results = await pipeline(
@@ -140,6 +183,7 @@ const results = await pipeline(
   d => agent(d.prompt, { label: `review:${d.key}`, phase: 'Review', schema: FINDING_SCHEMA, model: 'sonnet', effort: 'low' }),
   (res, d) => {
     if (!res || !res.findings.length) return []
+    if (res.findings.length >= MAX_FINDINGS) log(`${d.key}: hit the ${MAX_FINDINGS}-finding cap — lower-ranked findings were dropped`)
     return parallel(res.findings.map(f => () =>
       agent(`${CONTEXT}\n\nAdversarial verification. Read the code intending to refute it, and judge whether it actually holds.\nFinding(${d.key}): [${f.severity}] ${f.file}:${f.line} ${f.claim}\nEvidence: ${f.evidence}`, {
         label: `verify:${d.key}:${f.file}:${f.line}`, phase: 'Verify', schema: VERDICT_SCHEMA, model: 'opus', effort: 'high',
@@ -153,6 +197,8 @@ log(`${confirmed.length} of ${all.length} findings passed verification`)
 return { confirmed, rejectedCount: all.length - confirmed.length }
 ```
 At merge time the lead normalizes the Workflow's schema output into finding-jsonl + global ID. Without the Workflow tool, substitute Agent-parallel review for the dimension-split review.
+
+**Declare the verifier ceiling in the crew proposal**: worst case is `GROUPS.length × MAX_FINDINGS` Opus verifiers (20 with one group, 60 with three). The cap is what keeps one verbose reviewer from turning an approved 5-member crew into dozens of agents, so state the number the user is approving.
 
 ## A7. Cost-tier details
 
@@ -178,11 +224,11 @@ Within one task, autonomously adjust channel composition with **no human gate**.
 
 **Sole signal — grounded outcomes**: use only `confirmed`/`refuted` from `state.json.channel_scoreboard` (protocol.md §5), grounded in code/primary sources. Never use subjective lead/LLM evaluation (`protocol.md` §7 invariant).
 
-**Adjustment rule (multi-armed bandit, reward = confirmed/token)**: after each round's merge, read the scoreboard to decide the next round's crew composition. Early = exploration (fire all channels), late = exploitation.
-- **Drop**: a channel with `confirmed=0` and `refuted≥2` over the last 2 rounds → remove from the next round. Do not pay tokens for only false positives. Applies within the current task only; all channels revive next task.
-- **Exploitation (routing bias)**: if `confirmed` for a defect class concentrates in one channel, make it the priority re-run target of change-impact routing (protocol.md §9).
+**Adjustment rule (multi-armed bandit, reward = confirmed/token)**: after each round's merge, read the scoreboard to decide the next round's crew composition. Every field this rule needs — per-round `confirmed`/`refuted`, `tokens`, `classes` — is in the `channel_scoreboard` entry the lead appends at merge (protocol.md §5). Early = exploration (fire all channels), late = exploitation.
+- **Drop**: sum the last 2 round entries for a channel; `confirmed=0` and `refuted≥2` → remove it from the next round. Do not pay tokens for only false positives. Applies within the current task only; all channels revive next task.
+- **Exploitation (routing bias)**: read `classes` across rounds; if confirmed findings of one defect class concentrate in a channel, make it the priority re-run target of change-impact routing (protocol.md §9). Ties break toward the channel with the higher `confirmed/tokens` ratio, then toward the cheaper channel.
 - **Stretch/shrink**: read with the convergence trend (patterns.md termination condition) — if new C/H keeps declining and all channels skew `refuted`, treat as early convergence and fold the crew composition. While high `confirmed` continues, extend without consuming the difficulty-linked cap.
 
-**Grounding-cost discipline** (protocol.md §7): ground only differing or single-lineage findings; multiple-lineage agreement counts as `confirmed`.
+**Grounding-cost discipline** (protocol.md §7): ground only differing or single-lineage findings, and ground multiple-lineage agreements first — but agreement alone never writes `confirmed`. Ungrounded findings stay out of the scoreboard entirely, so the bandit only ever reads reality-checked labels.
 
 **Observing ensemble value (byproduct)**: the scoreboard records for free which channel earned grounding-confirmed findings. If on some task `confirmed` comes almost entirely from one channel (e.g. Claude introspection), that is direct evidence that — **for that task** — the other channels could not earn their tokens (ablation by observation). This describes one task and is not grounds for a convention change; it revises the crew-composition table only after cross-task offline analysis + a human gate.

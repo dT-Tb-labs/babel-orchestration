@@ -28,7 +28,7 @@ node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --cwd "<repo>" "Ta
 
 ### agy launch command template
 
-agy cannot read the fs (protocol.md §1) → do not reference a path to spec.md; inline the spec essentials (goal/criteria/constraints) into the prompt. Use python3 (stub environment: python3.13/py -3.13, see the SKILL.md crew table) plus the heredoc env-var approach (per agy SKILL.md, to avoid double-quote accidents). Keep the payload to the diff-hunk equivalent only, and mind the size limit (summarize before sending when it exceeds).
+agy cannot read the fs (protocol.md §1) → do not reference a path to spec.md; inline the spec essentials (goal/criteria/constraints) into the prompt. Use the heredoc env-var form below (avoids double-quote accidents). Keep the payload to the diff-hunk equivalent only, under the 32 KB cap (protocol.md §3).
 
 ```bash
 PROMPT=$(cat <<'EOF'
@@ -66,14 +66,20 @@ The diagnosis-handoff playbook for when stuck in Phase 2 (two consecutive failed
 
 Phase 3 by scale: **S = one Claude adversarial reviewer** using (a); skip the rest. SOL quick is acceptable if already running, but Claude is default because small diffs raise SOL false positives. **M = one (a)(b)(c) round**, lead merge, and C/H fixes; no step-5 loop, convergence check, or completeness critic. After an M fix, re-run one change-impact reviewer whose scope intersects the fix and reported the finding; prefer SOL when several qualify. **L = full section.** See SKILL.md Phase 0.
 
-**Review target = the actual changeset at the start of Phase 3** (fix the list of actually-edited files via `git diff --name-only` etc.), not the file list estimated during Phase 0 triage — if an out-of-scope shared module was touched during implementation, include it too (agy review #8).
+**Review target = the actual changeset at the start of Phase 3**, not the file list estimated during Phase 0 triage — if an out-of-scope shared module was touched during implementation, include it too (agy review #8).
 
-**The substance of the CHANGESET**: at the start of Phase 3, the lead creates `.babel/<task>/inbox/changeset.diff` (unified diff) plus a changed-file list. Reviewers that can read the fs (SOL / Claude subagents) receive it by path; agy receives the hunks inline. For spec-compliance review, distribute `.babel/<task>/spec.md` the same way (inline the essentials for agy).
+**The task delta, precisely.** Phase 0 records a baseline in `state.json` as `"baseline":{"commit":"<git rev-parse HEAD>","dirty":["<paths already modified before babel started>"]}`. The Phase 3 changeset is everything that changed since that baseline **minus** the pre-existing `dirty` paths the task never touched — reviewing the user's unrelated work in progress wastes a round and produces findings nobody asked for.
+
+Build it so nothing is silently dropped: `git diff <baseline-commit>` covers tracked edits **including staged ones**, and `git status --porcelain` names untracked files, which a plain diff omits entirely — a new file is exactly where a fresh defect hides. Write the unified diff to `.babel/<task>/inbox/changeset.diff` (untracked files appended via `git diff --no-index /dev/null <path>`) and the file list to `.babel/<task>/inbox/changeset-files.txt`. Reviewers that can read the fs (SOL / Claude subagents) receive both by path; agy receives the hunks inline. For spec-compliance review, distribute `.babel/<task>/spec.md` the same way (inline the essentials for agy).
 
 ### Procedure
 
 1. Fix the changeset and dispatch the 3 systems.
-   - (a) Claude adversarial Workflow: generate/run the script below. Adversarial verification is L-only; M uses parallel Agents without Opus adjudication. Scale reviewers by whole-changeset lines: under 50 = 1/all dimensions; 50-200 = 2; over 200 = 3/dimension split. Pilot 1 showed 3 reviewers excessive for 44 lines, so use 1.
+   - (a) Claude adversarial Workflow: generate/run the script below. Adversarial verification is L-only; M uses parallel Agents without Opus adjudication. Scale reviewers by whole-changeset lines — the four dimensions are always all covered, what changes is how many agents share them:
+     - **under 50 lines → 1 agent** carrying all four dimensions in one prompt (pilot 1 showed 3 reviewers excessive for 44 lines);
+     - **50-200 → 2 agents**: `correctness + edge-cases` / `security + spec-compliance`;
+     - **over 200 → 3 agents**: `correctness` / `security` / `edge-cases + spec-compliance`.
+     Pass the chosen grouping to the template's `DIMENSIONS` (A6 takes the groups as input; it is not fixed at four agents).
    - (b) agy: request review of the changeset's diff hunks inline.
    - (c) SOL normal: pass the changeset path via `.babel/<task>/inbox/` and request review.
    - (b)(c) dispatch simultaneously via `run_in_background`. (a) runs inside the lead's session.
@@ -88,18 +94,24 @@ Run correctness / security / edge-cases / spec-compliance through `pipeline()` i
 
 ### (b)(c) template
 
-(c) SOL: reuse the build-debug checkpoint template and change the goal to acceptance.
+(c) SOL: write the TaskPacket to `.babel/<task>/inbox/accept-r<N>.json` (argv avoidance, protocol.md §3) and point SOL at it. The packet must name the diff itself, not just the file list — a list of paths sends SOL to read current file contents, which after a later fix is no longer the changeset that was reviewed:
+```json
+{"goal":"full review of changeset",
+ "files":[{"path":".babel/<task>/inbox/changeset.diff"},{"path":".babel/<task>/spec.md"}],
+ "inputs":[".babel/<task>/inbox/changeset-files.txt"],
+ "criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
+```
 ```bash
-node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --cwd "<repo>" "TaskPacket: goal='full review of changeset', files=[{path:'<path to changeset file list>'}], out_schema='finding-jsonl or NONE'. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence 15-30tok>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
+node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
 ```
 Bash `timeout: 600000` + `run_in_background: true`. For critical acceptance of a security/irreversible L task, swap in `--tier deep` (see the cost discipline in SKILL.md).
 
-(b) agy: PTY wrapper. Pass the changeset's diff hunks inline, and include the finding-jsonl format line plus one example line in the prompt (inline, like SOL). Mind the payload size limit; when it exceeds, split or degrade (same criteria as the design template, protocol.md §3).
+(b) agy: pass the changeset's diff hunks inline, and include the finding-jsonl format line plus one example line in the prompt (inline, like SOL). Check the payload against the 32 KB cap before dispatch; over it, split the hunks or degrade (protocol.md §3).
 ```bash
 PROMPT=$(cat <<'EOF'
 TaskPacket: {"goal":"full review of changeset","files":[{"path":"<diff hunk summary>"}],"inputs":[],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
 Diff hunk: <paste the changed diff hunks inline>
-Output one JSON array per line: ["<id>","<sev C|H|M|L>","<file>",<line>,"<claim>","<evidence 15-30tok>"]. Example: ["F1","C","auth.py",42,"token expiry unchecked","verify_token() decodes JWT without checking exp claim"]. Output NONE (single word) if clean. No prose. Do not use any tools — answer directly from the text given above.
+Output one JSON array per line: ["<id>","<sev C|H|M|L>","<file>",<line>,"<claim>","<evidence ~10-25 words>"]. Example: ["F1","C","auth.py",42,"token expiry unchecked","verify_token() decodes JWT without checking exp claim"]. Output NONE (single word) if clean. No prose. Do not use any tools — answer directly from the text given above.
 EOF
 )
 AGY_PRINT_TIMEOUT=240s agyask "$PROMPT"
@@ -118,6 +130,6 @@ Bash `timeout: 300000` + `run_in_background: true`. A whole-changeset review is 
 
 ### Termination condition
 
-- **Convergence**: in some round, zero new C/H, and the immediately following completeness critic (L-only, `advanced.md` §A5) is also empty. If round 1 is clean, converge immediately. When a fix occurred, re-run the relevant system and converge when the post-fix round has zero new C/H.
-- **Cap (difficulty-linked)**: default 4 rounds. **While new C/H keeps decreasing every round, do not consume the cap** (if trending toward convergence, auto-extend up to +2; pilot 2's single hard spot required 7 rounds). Consume 1 cap only on a flat/divergent round. On extension, note it to the user in one line (including the increased token estimate). Before reaching the cap, the lead does one final reconsideration at maximum depth. If new C/H still remain, present the residual findings to the user (user gate "acceptance result" / "residual risk").
+- **Convergence**: a round with zero new C/H is a *candidate* clean round, not convergence. Run the completeness critic (L-only, `advanced.md` §A5) after it and converge only if the critic is empty too. This holds for round 1 as well — a clean first round is the case where an uncovered dimension is most likely to be the reason nothing was found.
+- **Cap**: **8 rounds is the hard ceiling**; no path extends past it. Rounds 1-4 run without asking. **A round on which new C/H decreased does not consume the budget** — trending toward convergence is not the failure mode the cap exists for; a flat or divergent round consumes 1. Going past round 4 needs the user's approval, asked *before* the round with the added token estimate (pilot 2's hard spot took 7 rounds, which fits under the ceiling with approval). At the ceiling, the lead does one final reconsideration at maximum depth, then presents residual findings to the user (user gate "acceptance result" / "residual risk").
 - **Crew stretch/shrink for L multi-round**: read the above convergence/extension decisions together with `channel_scoreboard` outcomes — channel dropping, routing weighting, and early folding are scoreboard-driven (`advanced.md` §A9; ephemeral, grounding-driven only, per protocol.md §7 invariant).
