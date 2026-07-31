@@ -3,7 +3,7 @@
 
 ## 現在の状態
 
-master、commit `f4a7e5a`（**未 push**、origin は `155df78` のまま）。
+master、commit `c7c3faa`、origin と同期済み（push 済み）。
 babel スキルを babel 自身で 8 ラウンド叩き、**49件を確定・修正 / 21件をグラウンディングで棄却**。
 
 全チャネル稼働、**サンドボックス弱体化ゼロ・per-call フラグ不要**:
@@ -37,7 +37,6 @@ babel スキルを babel 自身で 8 ラウンド叩き、**49件を確定・修
 
 ## 次のタスク / 未解決
 
-- **push 未実施**（`f4a7e5a`）。
 - Fable5 チャネル未検証（リードモデル切替はスキルからは不可）。
 - install.sh の venv 生成が check-then-act（並行実行でレース）。L 判定、実害想定なし。
 - 8ラウンドの作業記録は `.babel/babel-doc-hardening/`（gitignore 対象）。scoreboard・rejected fingerprint・各ラウンドの raw 出力あり。セッション終了で消えて構わない。
