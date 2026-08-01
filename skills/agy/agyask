@@ -43,7 +43,7 @@ agy_out=$(mktemp "${TMPDIR:-/tmp}/agyask.XXXXXX") || exit 3
 trap 'rm -f "$agy_out"' EXIT INT TERM
 # stdout is captured; stderr is deliberately left attached to ours, so agy's own
 # diagnostics still reach the caller exactly as they did before the watchdog.
-agy --mode plan --sandbox --print-timeout "${budget_secs}s" -p "$@" < /dev/null > "$agy_out" &
+agy --mode plan --sandbox --add-dir "$PWD" --print-timeout "${budget_secs}s" -p "$@" < /dev/null > "$agy_out" &
 agy_pid=$!
 waited=0
 while kill -0 "$agy_pid" 2>/dev/null; do

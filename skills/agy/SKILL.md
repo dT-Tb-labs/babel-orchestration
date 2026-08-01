@@ -49,11 +49,52 @@ agy --version 2>&1 || "$LOCALAPPDATA/agy/bin/agy.exe" --version 2>&1
 
 Automatic resolution: `--agy-path` first; then Windows: `%LOCALAPPDATA%\agy\bin\agy.exe` → `PATH` (`shutil.which agy`); Linux/macOS: `PATH` → `~/.local/bin/agy`, `~/.antigravity/bin/agy`, `/usr/local/bin/agy`. On POSIX, use `--agy-path` when `agy` is off `PATH`.
 
-### 2. Authentication (one time only)
+### 2. File reading in headless mode (`permissions.allow`)
+
+Headless mode cannot prompt, so every tool permission is **auto-denied** unless an allow-rule
+exists. Without one, agy answers nothing useful and prints:
+
+> `a tool required the "read_file" permission that headless mode cannot prompt for, so it was auto-denied`
+
+Two things are needed, both measured on agy 1.1.8 (2026-08-01):
+
+1. **Allow-rules in `~/.gemini/antigravity-cli/settings.json`**:
+
+```json
+"permissions": {
+  "allow": ["read_file(/abs/path/to/project/**)"]
+}
+```
+
+2. **`--add-dir "$PWD"`** — without it agy replies `No active workspace is set.`
+   `agyask` now passes it automatically.
+
+**Rule-grammar facts, all measured (the docs state none of this):**
+
+| Pattern | Result |
+|---|---|
+| `read_file(<dir>/**)` | matches files in **sub**directories of `<dir>` |
+| `read_file(<dir>/*)` | needed additionally for files **directly under** `<dir>` |
+| `read_file(<dir>/file.md)` | **does not match** — exact file paths are not honoured |
+| `read_file(<dir>/**/*.py)` | **does not match** — extension globs are not honoured |
+| `permissions.deny` | effect could not be demonstrated; do not rely on it |
+
+- **Both spellings of a firmlinked path must be listed.** On macOS a Google Drive vault is
+  reachable as `~/マイドライブ/...` and `~/Library/CloudStorage/GoogleDrive-*/マイドライブ/...`;
+  agy matches against the path it resolves to, so allowing only one spelling denies reads.
+- **Say "use ONLY the read_file tool, no shell commands" in the prompt.** Otherwise agy reaches
+  for the `command` tool, which is (correctly) still denied, and the call returns nothing.
+- **Scope the rule to directories that hold no secrets.** The only granularity that works is
+  the directory, so `read_file(<repo-root>/*)` also exposes a `.env` sitting at that root to a
+  third-party cloud service. Prefer per-subtree rules (`tests/**`, `src/**`) and inline the
+  contents of root-level files in the prompt instead — the caller controls that text, and it
+  needs no permission at all.
+
+### 3. Authentication (one time only)
 
 Run `agy` interactively once and complete the browser login it offers; credentials persist under `~/.gemini/antigravity-cli/`. There is no `agy auth` subcommand in 1.1.8.
 
-### 3. PTY wrapper dependencies (per OS)
+### 4. PTY wrapper dependencies (per OS)
 
 ```bash
 # Windows:
