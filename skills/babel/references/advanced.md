@@ -69,7 +69,7 @@ pilot has hit this yet.)
    ```bash
    solask --tier deep --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/stuck-<n>.json. 2 consecutive fix attempts failed on the same issue. Diagnose root cause. Output diagnosis JSON only: {diagnosis:str, proposed_fix:str, confidence:high|med|low}. Example: {\"diagnosis\":\"race between timer and callback\",\"proposed_fix\":\"guard with generation counter\",\"confidence\":\"high\"}. No prose."
    ```
-   Bash `timeout: 600000` (deep runs 5-6 min). **deep cap = 2 per task** (ask the user past that).
+   Deep runs 5-6 min, inside solask's ~9 min cap (protocol.md §8). **deep cap = 2 per task** (ask the user past that).
 4. If SOL's diagnosis doesn't resolve it, switch to agy (inline the same context —
    symptom, both attempts, target hunk — since agy can't read fs):
    ```bash
@@ -82,7 +82,7 @@ pilot has hit this yet.)
    [ "$(printf '%s' "$PROMPT" | wc -c)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
    AGY_PRINT_TIMEOUT=180s agyask "$PROMPT"
    ```
-   Bash `timeout: 200000`.
+   Bound = `AGY_PRINT_TIMEOUT` (protocol.md §8).
 5. If agy misses too, the lead does one max-depth rethink (ultrathink) — line up
    attempt 1 / attempt 2 / SOL / agy diagnoses and hunt the contradiction — before
    escalating to the user gate.

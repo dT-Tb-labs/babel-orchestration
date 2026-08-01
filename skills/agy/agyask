@@ -26,11 +26,34 @@ budget_secs=$(printf '%s' "$BUDGET" | tr -dc '0-9')
 [ -n "$budget_secs" ] || budget_secs=180
 
 started=$(date +%s)
-# `|| rc=$?` is load-bearing: under `set -e` a bare assignment from a failing
-# command substitution exits here, which is exactly the case (agy crashed or hit
-# its own print-timeout) the fallback below exists to rescue.
+# The budget is enforced here, not delegated. Two reasons it cannot be delegated:
+# agy's own --print-timeout never engages when agy wedges before starting its
+# timer (print/headless mode stalling on an MCP-tool confirmation), and the
+# caller's Bash `timeout:` does not apply to a `run_in_background` job at all —
+# measured, not assumed. Without this watchdog a wedged agy blocks forever and
+# the caller waits for a completion notification that never arrives. `timeout(1)`
+# is not present on stock macOS, hence the hand-rolled wait loop.
+# ponytail: kills the direct child only; a grandchild that outlives it is not
+# reaped. Move to setsid + process-group kill if orphans are ever observed.
 rc=0
-out=$(agy --mode plan --sandbox --print-timeout "${budget_secs}s" -p "$@" < /dev/null) || rc=$?
+agy_out=$(mktemp "${TMPDIR:-/tmp}/agyask.XXXXXX") || exit 3
+agy --mode plan --sandbox --print-timeout "${budget_secs}s" -p "$@" < /dev/null > "$agy_out" 2>/dev/null &
+agy_pid=$!
+waited=0
+while kill -0 "$agy_pid" 2>/dev/null; do
+  if [ "$waited" -ge "$budget_secs" ]; then
+    kill -TERM "$agy_pid" 2>/dev/null || :
+    sleep 2
+    kill -KILL "$agy_pid" 2>/dev/null || :
+    printf 'agyask: agy exceeded the %ss budget and was killed.\n' "$budget_secs" >&2
+    break
+  fi
+  sleep 1
+  waited=$(( waited + 1 ))
+done
+wait "$agy_pid" 2>/dev/null || rc=$?
+out=$(cat "$agy_out")
+rm -f "$agy_out"
 if [ -n "$out" ]; then
   printf '%s\n' "$out"
   exit 0

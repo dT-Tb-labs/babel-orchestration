@@ -117,6 +117,7 @@ Re-sending to a stateless external CLI (last_seen cursor diff + unresolved findi
 ## 8. Parallelization and barriers
 
 - Launch SOL + agy simultaneously via `run_in_background`; the lead proceeds with its own work without waiting. Harness notification signals completion (no polling needed).
+- **A background job has no harness timeout.** The Bash `timeout:` parameter is ignored once `run_in_background: true` is set (measured: a 25s command under `timeout: 5000` ran to completion). Every wall-clock bound therefore comes from the channel's own shim — `solask` caps polling at ~9 min (`WALL_CAP_MS`) and returns `SOL_STILL_RUNNING`; `agyask` enforces `AGY_PRINT_TIMEOUT` with its own watchdog because agy's `--print-timeout` does not engage when agy wedges before starting. The `timeout:` values in the launch templates are for the foreground case only; do not treat them as the bound on a backgrounded call. **A call that has run past its shim's bound is a wedged shim, not a slow model**: stop it with `TaskStop` and take the §10 "dead" row for that channel. A lead that keeps waiting for a notification that is not coming is the failure this rule exists to prevent.
 - **But a barrier is mandatory at merge / fix / revision boundaries.** Parallel execution crossing these boundaries is prohibited (prevents verification against an old code version).
 - **Reviewers are mutually blind within the same round**: a reviewer does not receive other reviewers' findings within the same round (prevents acceptance-side orchestration collapse). The lead alone merges and cross-references.
 
@@ -140,6 +141,7 @@ SKILL.md points here. A failure = a channel failure; drop the relevant track and
 | external output non-conforming to schema (prose / error text / empty) | re-show the format line and re-request once → on repeated failure continue that round without the relevant track, recover next round (§7 schema verification gate) |
 | external 429 / quota exceeded | switch to a degraded config with the relevant track dropped, explicit. SOL call count is recorded in `state.json` |
 | review loop diverges | cut off with a difficulty-linked cap (patterns.md termination conditions), present residual findings to the user, and ask for an acceptance decision |
+| background call silent past its shim's bound (~9 min SOL / the agy budget, §8) | `TaskStop` the job, then take that channel's "dead" row above. Never wait past the bound: a background job has no harness timeout, so nothing else will end it |
 
 ## 11. De-duplicating instruction re-sends
 

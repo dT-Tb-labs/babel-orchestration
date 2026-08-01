@@ -17,6 +17,8 @@ solask --tier <quick|normal|deep> --cwd "<repo-abs-path>" "<prompt>"
 
 Use Bash tool `timeout: 600000` (10 min). The wrapper launches a background Codex job, polls internally, and prints only SOL's final answer — one round-trip, no progress spam. Read-only sandbox by default.
 
+The wrapper's own ~9 min poll cap (`WALL_CAP_MS`) is what actually bounds the call: with `run_in_background: true` the Bash `timeout` is ignored (measured), so the 600000 above applies only to a foreground call. Past ~9 min the wrapper prints `SOL_STILL_RUNNING` and returns. **The Codex job it leaves behind is not killed** — that is deliberate (re-attach with `--attach`), but abandoned jobs accumulate as live `codex` processes. Kill them by PID when a run is truly done with them.
+
 ## Token discipline (why this skill exists)
 
 Three levers, all applied by default:
