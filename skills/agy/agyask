@@ -36,8 +36,14 @@ started=$(date +%s)
 # ponytail: kills the direct child only; a grandchild that outlives it is not
 # reaped. Move to setsid + process-group kill if orphans are ever observed.
 rc=0
+killed=0
 agy_out=$(mktemp "${TMPDIR:-/tmp}/agyask.XXXXXX") || exit 3
-agy --mode plan --sandbox --print-timeout "${budget_secs}s" -p "$@" < /dev/null > "$agy_out" 2>/dev/null &
+# Covers a signal landing on agyask itself. The explicit `rm -f`s below still
+# matter: the PTY fallback ends in `exec`, which never runs an EXIT trap.
+trap 'rm -f "$agy_out"' EXIT INT TERM
+# stdout is captured; stderr is deliberately left attached to ours, so agy's own
+# diagnostics still reach the caller exactly as they did before the watchdog.
+agy --mode plan --sandbox --print-timeout "${budget_secs}s" -p "$@" < /dev/null > "$agy_out" &
 agy_pid=$!
 waited=0
 while kill -0 "$agy_pid" 2>/dev/null; do
@@ -45,13 +51,22 @@ while kill -0 "$agy_pid" 2>/dev/null; do
     kill -TERM "$agy_pid" 2>/dev/null || :
     sleep 2
     kill -KILL "$agy_pid" 2>/dev/null || :
-    printf 'agyask: agy exceeded the %ss budget and was killed.\n' "$budget_secs" >&2
+    killed=1
     break
   fi
   sleep 1
   waited=$(( waited + 1 ))
 done
 wait "$agy_pid" 2>/dev/null || rc=$?
+# A killed agy's file may already hold a partial answer. Discard it rather than
+# printing it: downstream this is parsed as a DesignPacket or finding-jsonl, and
+# a truncated one that still exits 0 is indistinguishable from a real answer.
+if [ "$killed" -eq 1 ]; then
+  printf 'agyask: agy exceeded the %ss budget and was killed; discarding %s bytes of partial output.\n' \
+    "$budget_secs" "$(wc -c < "$agy_out" | tr -d ' ')" >&2
+  rm -f "$agy_out"
+  exit 2
+fi
 out=$(cat "$agy_out")
 rm -f "$agy_out"
 if [ -n "$out" ]; then
