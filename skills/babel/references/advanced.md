@@ -169,11 +169,16 @@ export const meta = {
 // lines and headers inflate wc -l 2-3×, which silently promotes a small change into
 // a bigger reviewer bracket. Compute it as:
 //   echo $(( $(grep -Ec '^[+-]' <diff>) - $(grep -Ec '^(\+\+\+|---) ' <diff>) ))
-if (!args || !args.diff || !args.spec || typeof args.diffLines !== 'number') {
+// `args` reaches the script as a JSON *string* on some harness paths and as a
+// parsed object on others — measured both ways, so normalise before validating.
+// Without this, a correctly-formed call fails the guard below and the run dies
+// at 0 agents with a message that blames the caller for a harness detail.
+const A = typeof args === 'string' ? (() => { try { return JSON.parse(args) } catch { return null } })() : args
+if (!A || !A.diff || !A.spec || typeof A.diffLines !== 'number') {
   throw new Error('babel-acceptance-review requires args {diff, spec, diffLines}')
 }
-const CHANGESET = args.diff
-const SPEC = args.spec
+const CHANGESET = A.diff
+const SPEC = A.spec
 const MAX_FINDINGS = 20   // per dimension group; each one spawns an Opus verifier
 const CONTEXT = `TaskPacket: {"goal":"acceptance review of the changeset","files":[{"path":"${CHANGESET}"},{"path":"${SPEC}"}],"inputs":["${CHANGESET}","${SPEC}"],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
 Read those two paths — they are your only inputs (protocol.md §2 access list). Report in protocol.md's finding-jsonl format: severity(C/H/M/L), file, line, claim, evidence(~10-25 words) required. Exclude speculation and style preferences. Report at most ${MAX_FINDINGS} findings, highest severity first.`
@@ -235,9 +240,9 @@ const GROUPS_BY_SIZE = {
 // reviews a 900-line changeset with a single agent and reports the round clean.
 // `args.fold` (optional) forces the one-agent shape — the §A9 measured prior for
 // L round 1, and the fold state the bandit may impose on later rounds.
-const GROUPS = args.fold ? GROUPS_BY_SIZE.small
-  : args.diffLines > 200 ? GROUPS_BY_SIZE.large
-  : args.diffLines >= 50 ? GROUPS_BY_SIZE.medium
+const GROUPS = A.fold ? GROUPS_BY_SIZE.small
+  : A.diffLines > 200 ? GROUPS_BY_SIZE.large
+  : A.diffLines >= 50 ? GROUPS_BY_SIZE.medium
   : GROUPS_BY_SIZE.small
 const DIMENSIONS = GROUPS.map(keys => ({
   key: keys.join('+'),
