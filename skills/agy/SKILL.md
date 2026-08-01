@@ -101,7 +101,7 @@ Please evaluate:
 Be concise and direct. Flag only meaningful issues, not minor style nitpicks. If the code looks good, say so."
 ```
 
-Also set `timeout: 200000` (200s) on the Bash tool — above the 180s budget so agyask, not Bash, is what times out.
+Also set `timeout: 200000` (200s) on the Bash tool — above the 180s budget so agyask, not Bash, is what times out. **This only matters in the foreground**: a `run_in_background: true` call ignores the Bash `timeout` entirely (measured), so `AGY_PRINT_TIMEOUT` is the sole bound there. agyask enforces it with its own watchdog — agy's `--print-timeout` does not engage when agy wedges before starting its timer.
 
 **Prompt argument escaping:** For prompts with many double quotes, pass via a heredoc → environment variable:
 
@@ -154,7 +154,7 @@ For findings judged "needs fixing":
 | wrapper exit 2 + empty stdout | agy unresponsive even inside a TTY; likely expired auth — run `agy` interactively and sign in again |
 | `agyask` exit 2 + "not starting the PTY fallback" | The direct call burned the whole `AGY_PRINT_TIMEOUT` budget. Raise the budget (and the Bash timeout above it), or shrink the prompt |
 | wrapper timeout (exit 2 + "Timeout after") | Huge prompt or upstream outage. Extend `--timeout`, `--print-timeout 5m` |
-| Hangs beyond 200 seconds | Bash timeout expired. Keep the wrapper's `--timeout` below the Bash timeout |
+| Hangs beyond 200 seconds | Foreground: the Bash timeout expired — keep the wrapper's `--timeout` below it. Backgrounded: the Bash timeout never applied; agyask's watchdog kills agy at `AGY_PRINT_TIMEOUT` and exits 2. Silence past that means the shim itself is wedged — `TaskStop` the job |
 | Garbled Japanese text | agy's output-side issue (wrapper only strips ANSI). Avoid by adding "Reply in English" to the prompt |
 
 ## Example Output

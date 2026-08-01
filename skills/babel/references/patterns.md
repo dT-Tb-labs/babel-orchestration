@@ -30,7 +30,7 @@ solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-re
 ```
 
 - `--tier normal` (normal for design, deep for diagnosis/critical acceptance).
-- Bash `timeout: 600000` (required per cdx-sol SKILL.md; the default 120s kills long runs) plus `run_in_background: true`. Wait for the completion notification together with agy's.
+- `run_in_background: true`, with Bash `timeout: 600000` for the foreground case only — a backgrounded job ignores it and is bounded by solask's own ~9 min cap (protocol.md §8). Wait for the completion notification together with agy's.
 
 ### agy launch command template
 
@@ -46,7 +46,7 @@ EOF
 AGY_PRINT_TIMEOUT=180s agyask "$PROMPT"
 ```
 
-Use Bash-side `timeout: 200000` alongside (per agy SKILL.md).
+Bash `timeout: 200000` applies only if run in the foreground; backgrounded, the bound is `AGY_PRINT_TIMEOUT` enforced by the agyask watchdog (protocol.md §8).
 
 ---
 
@@ -113,7 +113,7 @@ Run correctness / security / edge-cases / spec-compliance through `pipeline()` i
 ```bash
 solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
 ```
-Bash `timeout: 600000` + `run_in_background: true`. For critical acceptance of a security/irreversible L task, swap in `--tier deep` (see the cost discipline in SKILL.md).
+`run_in_background: true` (bound = solask's ~9 min cap, not the Bash `timeout: 600000`; protocol.md §8). For critical acceptance of a security/irreversible L task, swap in `--tier deep` (see the cost discipline in SKILL.md).
 
 (b) agy: pass the changeset's diff hunks inline, and include the finding-jsonl format line plus one example line in the prompt (inline, like SOL). Check the payload against the 32 KB cap before dispatch; over it, split the hunks or degrade (protocol.md §3).
 ```bash
@@ -126,7 +126,7 @@ EOF
 [ "$(printf '%s' "$PROMPT" | wc -c)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
 AGY_PRINT_TIMEOUT=240s agyask "$PROMPT"
 ```
-Bash `timeout: 300000` + `run_in_background: true`. A whole-changeset review is heavier than a design request, so agy's timeout is intentionally extended to 240/300000.
+`run_in_background: true` with `AGY_PRINT_TIMEOUT=240s` — a whole-changeset review is heavier than a design request, so agy's budget is intentionally extended. That env var is the real bound; the Bash `timeout: 300000` only applies in the foreground (protocol.md §8).
 
 ### Merge procedure
 
