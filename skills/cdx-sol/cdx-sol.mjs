@@ -69,7 +69,11 @@ function guardOutput(text, cwd, offloadChars = OFFLOAD_CHARS) {
     const ignore = path.join(dir, ".gitignore");
     const cur = fs.existsSync(ignore) ? fs.readFileSync(ignore, "utf8") : "";
     if (!cur.split(/\r?\n/).some(l => l.trim() === "*")) {
-      fs.writeFileSync(ignore, cur ? `${cur.replace(/\n?$/, "\n")}*\n` : "*\n", "utf8");
+      // Write beside it and rename: writeFileSync truncates first, so a disk-full
+      // failure mid-write would destroy an existing file the catch then swallows.
+      const tmp = `${ignore}.tmp.${process.pid}`;
+      fs.writeFileSync(tmp, cur ? `${cur.replace(/\n?$/, "\n")}*\n` : "*\n", "utf8");
+      fs.renameSync(tmp, ignore);
     }
     // pid + counter, not just a millisecond stamp: two calls landing in the same
     // millisecond would name the same file and one answer would overwrite the other.
@@ -108,7 +112,7 @@ function runSelftest() {
   assert.equal(small.rendered, "hello");
   assert.equal(small.offloaded, null);
 
-  const tmp = fs.mkdtempSync(path.join(process.env.TEMP || ".", "cdx-sol-selftest-"));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cdx-sol-selftest-"));
   const big = "x".repeat(30000);
   const g = guardOutput(big, tmp, 24000);
   assert.ok(g.offloaded && fs.existsSync(g.offloaded));
@@ -206,13 +210,14 @@ function launchBackground({ prompt, cwd, effort, write }) {
 }
 
 function waitLoop(jobId, cwd, wallCapMs = WALL_CAP_MS) {
-  // Monotonic clock: a backward NTP correction on Date.now() would extend the
-  // poll past the bound this function exists to enforce.
-  const start = performance.now();
+  // Two clocks, whichever elapses first: performance.now() ignores a wall-clock
+  // step but pauses across suspend on Linux, Date.now() is the reverse.
+  const startMono = performance.now(), startWall = Date.now();
+  const elapsed = () => Math.max(performance.now() - startMono, Date.now() - startWall);
   const SAFETY_MS = 5000; // never let a slice run past wallCapMs (keeps total < Claude's Bash timeout)
   let unknownStreak = 0;
   while (true) {
-    const remaining = wallCapMs - (performance.now() - start);
+    const remaining = wallCapMs - elapsed();
     if (remaining <= SAFETY_MS) return "running"; // graceful: caller re-attaches
     const slice = Math.min(POLL_TIMEOUT_MS, remaining - SAFETY_MS);
     // Hard bound one slice above what the companion was asked to wait, so a slice
@@ -256,7 +261,7 @@ function fetchResult(jobId, cwd) {
   return { text, status: res?.status ?? 0 };
 }
 
-const START_MS = performance.now();
+const START_MONO = performance.now(), START_WALL = Date.now();
 
 function main() {
   const o = parseArgs(process.argv.slice(2));
@@ -277,7 +282,8 @@ function main() {
   // The advertised bound is the whole process, not the poll loop: a 60s launch
   // plus a 540s poll plus a 60s result fetch is 660s, past the 600s a foreground
   // caller allows. Spend what the launch already used, and keep a fetch reserve.
-  const pollCap = WALL_CAP_MS - (performance.now() - START_MS) - 60000;
+  const startupElapsed = Math.max(performance.now() - START_MONO, Date.now() - START_WALL);
+  const pollCap = WALL_CAP_MS - startupElapsed - 60000;
   const status = waitLoop(jobId, o.cwd, Math.max(pollCap, 10000));
   if (status === "running") {
     console.log(`SOL_STILL_RUNNING ${jobId}`);

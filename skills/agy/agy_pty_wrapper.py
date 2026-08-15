@@ -161,16 +161,23 @@ def main() -> int:
         except (ValueError, OSError):  # not the main thread / unsupported
             pass
 
-    # Monotonic: a wall-clock jump (NTP correction, manual set) would otherwise
-    # push the deadline out and leave the "bounded" child running past its budget.
-    deadline = time.monotonic() + args.timeout
+    # Two clocks, whichever elapses first. monotonic() ignores a wall-clock step
+    # (NTP, manual set) but pauses across suspend on Linux; time() covers suspend
+    # but can move backwards. Taking the max elapsed makes both directions bind.
+    start_mono, start_wall = time.monotonic(), time.time()
+
+    def elapsed() -> float:
+        return max(time.monotonic() - start_mono, time.time() - start_wall)
     # Accumulate raw chunks without decoding per-read: on POSIX the backend
     # returns bytes and a multibyte UTF-8 char can straddle a read boundary,
     # so we join first and decode once at the end.
     chunks: list = []
+    total = 0
+    MAX_BYTES = 8 * 1024 * 1024  # a review answer is kilobytes; past this it is a runaway
+    overflowed = False
     timed_out = False
     while True:
-        if time.monotonic() > deadline:
+        if elapsed() > args.timeout:
             sys.stderr.write(f"Timeout after {args.timeout}s\n")
             timed_out = True
             try:
@@ -193,6 +200,14 @@ def main() -> int:
                 time.sleep(0.1)
                 continue
             chunks.append(data)
+            total += len(data)
+            if total > MAX_BYTES:
+                overflowed = True
+                try:
+                    proc.terminate(force=True)
+                except Exception:
+                    pass
+                break
         else:
             # ptyprocess.read() wraps a blocking os.read() with no timeout, so a
             # silent/hung child would never let us re-check the deadline. Poll the
@@ -222,6 +237,14 @@ def main() -> int:
                     break
                 continue
             chunks.append(data)
+            total += len(data)
+            if total > MAX_BYTES:
+                overflowed = True
+                try:
+                    proc.terminate(force=True)
+                except Exception:
+                    pass
+                break
 
     if IS_WINDOWS:
         # winpty.read() already returns str.
@@ -230,6 +253,17 @@ def main() -> int:
         # ptyprocess.read() returns bytes; decode once to avoid boundary splits.
         raw = b"".join(chunks).decode("utf-8", errors="replace")
     clean = strip_ansi(raw)
+    if overflowed:
+        sys.stderr.write(
+            "agy_pty_wrapper: agy produced more than %d bytes; killed it and discarded the output.\n" % MAX_BYTES
+        )
+        return 2
+    # Invalid bytes decode to U+FFFD. A reply that is mostly replacement characters
+    # is not an answer, but it is non-empty, so the emptiness test below would have
+    # called it a completed review.
+    if clean and clean.count("\ufffd") > len(clean) // 10:
+        sys.stderr.write("agy_pty_wrapper: output is mostly undecodable bytes; discarding.\n")
+        return 2
     if timed_out:
         # Same rule agyask applies to a watchdog kill: whatever arrived before the
         # deadline is a partial answer, and a partial finding-jsonl still parses
@@ -244,6 +278,14 @@ def main() -> int:
     # diagnostics look exactly like an answer: non-empty text, exit 0. Ask the
     # child what it actually did before calling this a review.
     try:
+        # Bounded: a child that closed its PTY but kept running would make an
+        # unqualified wait() block forever, right after the read loop stopped
+        # enforcing any deadline.
+        wait_until = time.monotonic() + 10
+        while proc.isalive() and time.monotonic() < wait_until:
+            time.sleep(0.1)
+        if proc.isalive():
+            proc.terminate(force=True)
         proc.wait()
         child_status = proc.exitstatus
         child_signal = proc.signalstatus
