@@ -97,8 +97,11 @@ agy_err=$(mktemp "${TMPDIR:-/tmp}/agyask-err.XXXXXX") || { rm -f "$agy_out"; exi
 # left running under a dead parent is the orphan that later shows up as "out of
 # pty devices". `${agy_pid:-}` because the traps are armed before the spawn.
 trap 'rm -f "$agy_out" "$agy_err"' EXIT
-trap 'kill -TERM ${agy_pid:-0} 2>/dev/null; rm -f "$agy_out" "$agy_err"; exit 130' INT
-trap 'kill -TERM ${agy_pid:-0} 2>/dev/null; rm -f "$agy_out" "$agy_err"; exit 143' TERM
+# `${agy_pid:-0}` would have been catastrophic: kill(1) reads 0 as "every process
+# in my process group", so a signal arriving before the spawn would have taken the
+# caller down with it. Only signal a pid we actually have.
+trap '[ -n "${agy_pid:-}" ] && kill -TERM "$agy_pid" 2>/dev/null; rm -f "$agy_out" "$agy_err"; exit 130' INT
+trap '[ -n "${agy_pid:-}" ] && kill -TERM "$agy_pid" 2>/dev/null; rm -f "$agy_out" "$agy_err"; exit 143' TERM
 # stdout is captured; stderr is captured only to be inspected for the
 # permission-abort line and is replayed verbatim afterwards, so agy's own
 # diagnostics still reach the caller exactly as they did before.
@@ -169,7 +172,11 @@ if [ "$remaining" -lt 30 ]; then
 fi
 # The wrapper needs ptyprocess, which PEP 668 blocks from a system pip. install.sh
 # puts it in a venv outside the skills tree, since installing wipes and recopies that.
+# Both layouts: install.sh creates Scripts/python.exe under Windows and
+# bin/python3 elsewhere. Checking only the POSIX path sent every Windows run to
+# the system interpreter, where the PTY package is not installed.
 PY="$HOME/.local/share/babel/agy-venv/bin/python3"
+[ -x "$PY" ] || PY="$HOME/.local/share/babel/agy-venv/Scripts/python.exe"
 [ -x "$PY" ] || PY=python3
 rm -f "$agy_err"
 # `--` first: the wrapper takes the prompt as a positional argparse argument, so a

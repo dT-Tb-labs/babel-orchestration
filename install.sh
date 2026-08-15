@@ -52,7 +52,10 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
       # that channel dead. The swap is two renames, not one, so it is not atomic
       # either — but it is short and holds no partially-copied tree.
       # $$ in the staging names: two installers running at once would otherwise
-      # share .new/.old and delete each other's half-installed tree.
+      # share .new/.old and delete each other's half-installed tree. This makes a
+      # concurrent run non-destructive, not correct — the final rename still
+      # races, and the loser can nest its tree under the winner. Do not run two
+      # installs at once; nothing here makes that safe.
       rm -rf "$DEST/.$s.new.$$" "$DEST/.$s.old.$$"
       cp -R "$SRC_DIR/$s" "$DEST/.$s.new.$$"
       if [ -d "$DEST/$s" ]; then mv "$DEST/$s" "$DEST/.$s.old.$$"; fi
@@ -96,7 +99,7 @@ note "babel needs the superpowers skill set + Workflow tool inside Claude Code (
 if command -v node >/dev/null 2>&1; then
   if [ -f "$DEST/cdx-sol/cdx-sol.mjs" ] && node "$DEST/cdx-sol/cdx-sol.mjs" --selftest >/dev/null 2>&1; then
     ok "cdx-sol channel ready (node + companion; --selftest never calls SOL, so auth stays unverified — run 'codex login' if the first real call returns empty)"
-    if [ "$(command -v solask 2>/dev/null)" = "$BIN/solask" ]; then
+    if [ "$(command -v solask 2>/dev/null)" -ef "$BIN/solask" ] 2>/dev/null; then
       note "cdx-sol runs outside the Claude Code sandbox: add \"solask\" AND \"solask *\" to sandbox.excludedCommands in ~/.claude/settings.json (its own sandbox-exec cannot nest inside Claude's). An excluded command runs unsandboxed — read the shim and README 'What the sandbox exclusion costs you' first, or skip it and let the channel degrade off. Then call SOL as: solask --tier normal --cwd <repo> \"<prompt>\""
     else
       note "solask not on PATH — babel calls SOL through it. Add $BIN to PATH (until then every SOL call needs a per-call sandbox bypass)."
@@ -136,7 +139,9 @@ PYEOF
     if agy_present; then
       # Compare against the copy just installed: a bare `command -v` happily
       # reports a stale agyask from some other PATH entry as "ready".
-      if [ "$(command -v agyask 2>/dev/null)" = "$BIN/agyask" ]; then
+      # -ef compares inode, so a PATH entry that symlinks to the installed shim
+      # still counts; plain string equality rejected it.
+      if [ "$(command -v agyask 2>/dev/null)" -ef "$BIN/agyask" ] 2>/dev/null; then
         ok "agy channel ready ($PYTHON + $PTY_PKG + agy binary + agyask)"
       else
         note "agyask not on PATH — babel calls agy through it. Add $BIN to PATH (channel degrades off until then)."
