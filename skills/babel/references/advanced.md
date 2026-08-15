@@ -559,10 +559,22 @@ Within one task, autonomously adjust channel composition with **no human gate**.
   decision is available in the standard three-channel L crew**. What actually governs
   the externals is the two drop rules, which need no cost term. Do not paper over
   this by estimating their spend — that is precisely the flattery §5 forbids, and a
-  wrong denominator folds a channel for a number the lead invented. The upgrade path
-  is a shim that surfaces the provider's usage record; until one does, treat the fold
-  rule as an (a)-track-and-future rule and say so in the crew report rather than
-  implying the crew was compared.
+  wrong denominator folds a channel for a number the lead invented.
+  **Both providers do report usage — the loss is entirely in our shims.** Measured:
+  `agy --output-format json` returns
+  `{"usage":{"input_tokens":…,"output_tokens":…,"thinking_tokens":…,"cache_read_tokens":…,"total_tokens":…}}`
+  alongside the response (confirmed live). codex emits it as the `token_count` event
+  under `codex exec --json` — its own `TokenCountEvent` carries `total_token_usage`,
+  `last_token_usage`, `model_context_window` and `rate_limits`, over a `TokenUsage`
+  struct of `input_tokens`/`cached_input_tokens`/`cache_write_input_tokens`/
+  `output_tokens`/`reasoning_output_tokens`/`total_tokens` (read from the shipped
+  binary's symbols; a live check was blocked by a provider rate limit). So the
+  upgrade is concrete, not speculative: teach `agyask` to read the JSON envelope and
+  `cdx-sol.mjs` to keep the usage record its companion already receives instead of
+  ending at `return { text, status }`. Until that lands, treat the fold rule as an
+  (a)-track rule and say so in the crew report rather than implying the crew was
+  compared. Note when it does land that a mixed crew is only comparable **within one
+  unit** — a token count and a byte count are not the same denominator.
 - **Fold on reward before dropping on failure**: the drop rule above needs
   `confirmed=0`, which a channel earning one finding per round never hits no matter
   what it costs. So also compare the split reward across channels each round and
