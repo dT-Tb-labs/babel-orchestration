@@ -204,7 +204,6 @@ function launchBackground({ prompt, cwd, effort, write }) {
   // with nobody able to attach to it or kill it.
   if (timedOut && jobId) throw new Error(`Launch timed out but the job started — re-attach or kill it: ${jobId}`);
   if (code !== 0) throw new Error(`Launch failed: ${stderr || stdout}`);
-  if (!jobId) throw new Error(`Bad launch JSON: ${stdout}`);
   if (!jobId) throw new Error(`No jobId in launch output: ${stdout}`);
   return jobId;
 }
@@ -284,7 +283,11 @@ function main() {
   // caller allows. Spend what the launch already used, and keep a fetch reserve.
   const startupElapsed = Math.max(performance.now() - START_MONO, Date.now() - START_WALL);
   const pollCap = WALL_CAP_MS - startupElapsed - 60000;
-  const status = waitLoop(jobId, o.cwd, Math.max(pollCap, 10000));
+  // No floor. Clamping an exhausted budget up to 10s bought one more poll slice
+  // *past* the advertised bound — waitLoop restarts its own clock from zero, so
+  // the 10s was spent on top of the launch, not inside the cap. With nothing
+  // left, the job is running and the caller re-attaches.
+  const status = pollCap > 0 ? waitLoop(jobId, o.cwd, pollCap) : "running";
   if (status === "running") {
     console.log(`SOL_STILL_RUNNING ${jobId}`);
     console.log(`Still working after ${Math.round(WALL_CAP_MS / 60000)}min. Re-attach: node cdx-sol.mjs --attach ${jobId} --cwd "${o.cwd}"`);

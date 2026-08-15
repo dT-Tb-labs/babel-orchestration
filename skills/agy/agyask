@@ -82,6 +82,13 @@ fi
 # planted earlier on PATH would execute unsandboxed with the user's full access.
 # Same resolution order as agy_pty_wrapper.py.
 AGY_BIN=""
+# An AGY_PATH that is set but not executable is a typo or a bad install, not a
+# request to fall back: silently using a different binary than the one the caller
+# pinned is exactly the substitution this resolution order exists to prevent.
+if [ -n "${AGY_PATH:-}" ] && [ ! -x "${AGY_PATH}" ]; then
+  printf 'agyask: AGY_PATH is set to "%s" but that is not an executable file. Fix it or unset it.\n' "$AGY_PATH" >&2
+  exit 3
+fi
 for _c in "${AGY_PATH:-}" "$HOME/.local/bin/agy" "$HOME/.antigravity/bin/agy" /usr/local/bin/agy /opt/homebrew/bin/agy; do
   [ -n "$_c" ] && [ -x "$_c" ] && { AGY_BIN=$_c; break; }
 done
@@ -123,6 +130,16 @@ kill_tree_hard() {
   kill -KILL "$1" 2>/dev/null || :
 }
 
+# The KILL walk re-discovers children with pgrep -P, which only sees processes
+# whose parent is still the one we are walking. A child that outlives its parent
+# during the TERM grace is reparented to PID 1 and becomes invisible to that walk,
+# so it never gets SIGKILL. Snapshot the tree while it is still intact and kill
+# the snapshot too. (Accepted, as elsewhere in this file: a pid recycled inside
+# the grace window would be signalled by mistake.)
+descendants() {
+  for _d in $(pgrep -P "$1" 2>/dev/null || :); do descendants "$_d"; printf '%s ' "$_d"; done
+}
+
 rc=0
 killed=0
 agy_out=$(mktemp "${TMPDIR:-/tmp}/agyask.XXXXXX") || exit 3
@@ -157,12 +174,18 @@ deadline=$(( started + budget_secs ))
 # the iteration ceiling is generous enough that scheduler latency alone (which
 # makes each pass cost slightly more than 1s) never trips it early.
 ticks=0
-tick_ceiling=$(( budget_secs * 3 ))
+# +60, not ×3: each pass costs slightly more than its 1s sleep, so the counter
+# always lags real seconds and needs *some* slack, but a multiplier made the
+# backstop three times the advertised budget — on a stepped-back clock, the only
+# case where it is load-bearing, a 180s call could run for 540s.
+tick_ceiling=$(( budget_secs + 60 ))
 while kill -0 "$agy_pid" 2>/dev/null; do
   if [ "$(date +%s)" -ge "$deadline" ] || [ "$ticks" -ge "$tick_ceiling" ]; then
+    tree_pids=$(descendants "$agy_pid")
     kill_tree "$agy_pid"
     sleep 2
     kill_tree_hard "$agy_pid"
+    for _p in $tree_pids; do kill -KILL "$_p" 2>/dev/null || :; done
     killed=1
     break
   fi
@@ -212,6 +235,10 @@ fi
 # finish — otherwise the caller's Bash timeout kills a fallback that never had a
 # chance, and the failure looks like agy hanging rather than running out of time.
 remaining=$(( budget_secs - ($(date +%s) - started) ))
+# `date` can step backwards, which makes the elapsed term negative and hands the
+# fallback *more* than the total budget the caller asked for. The two phases
+# together must never exceed it.
+[ "$remaining" -gt "$budget_secs" ] && remaining=$budget_secs
 if [ "$remaining" -lt 30 ]; then
   printf 'agyask: no output and only %ss of the %ss budget left — not starting the PTY fallback.\n' \
     "$remaining" "$budget_secs" >&2
@@ -230,4 +257,8 @@ rm -f "$agy_err"
 # payload that begins with a dash is parsed as wrapper options — and a payload of
 # exactly `--help` printed help to stdout and exited 0, which the caller would
 # have ingested as agy's answer.
-exec "$PY" "$HOME/.claude/skills/agy/agy_pty_wrapper.py" --timeout "$remaining" -- "$prompt"
+# `--agy-path "$AGY_BIN"`: without it the wrapper resolves agy itself, and on POSIX
+# its resolution order treats PATH as authoritative — reopening, on the fallback
+# path only, exactly the planted-binary hole the AGY_BIN loop above closes. Both
+# paths must pin the same executable.
+exec "$PY" "$HOME/.claude/skills/agy/agy_pty_wrapper.py" --agy-path "$AGY_BIN" --timeout "$remaining" -- "$prompt"
