@@ -200,11 +200,19 @@ def main() -> int:
         # ptyprocess.read() returns bytes; decode once to avoid boundary splits.
         raw = b"".join(chunks).decode("utf-8", errors="replace")
     clean = strip_ansi(raw)
+    if timed_out:
+        # Same rule agyask applies to a watchdog kill: whatever arrived before the
+        # deadline is a partial answer, and a partial finding-jsonl still parses
+        # line by line, so printing it lets a truncated review pass a format check
+        # as a completed one. Report the size on stderr and print nothing.
+        sys.stderr.write(
+            "agy_pty_wrapper: timed out; discarding %d bytes of partial output.\n"
+            % len(clean)
+        )
+        return 2
     # Write via buffer to avoid cp932 encode errors on Windows with emoji output
     sys.stdout.buffer.write(clean.encode("utf-8", errors="replace"))
     sys.stdout.buffer.flush()
-    if timed_out:
-        return 2
     return 0 if clean.strip() else 2
 
 

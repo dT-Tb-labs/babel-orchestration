@@ -22,8 +22,21 @@
 set -eu
 
 BUDGET="${AGY_PRINT_TIMEOUT:-180s}"
-budget_secs=$(printf '%s' "$BUDGET" | tr -dc '0-9')
-[ -n "$budget_secs" ] || budget_secs=180
+# Stripping non-digits alone read "3m" as 3 seconds — a Go-style duration the agy
+# docs themselves use — and killed agy before it could answer. Accept s/m/h, and
+# refuse a budget under 10s rather than starting a call the watchdog will shoot
+# on its first check.
+budget_num=$(printf '%s' "$BUDGET" | tr -dc '0-9')
+[ -n "$budget_num" ] || budget_num=180
+case "$BUDGET" in
+  *h) budget_secs=$(( budget_num * 3600 )) ;;
+  *m) budget_secs=$(( budget_num * 60 )) ;;
+  *)  budget_secs=$budget_num ;;
+esac
+if [ "$budget_secs" -lt 10 ]; then
+  printf 'agyask: AGY_PRINT_TIMEOUT=%s is under the 10s floor — refusing to start a call that would be killed immediately.\n' "$BUDGET" >&2
+  exit 3
+fi
 
 # Print/headless agy aborts the entire run when a tool needs a permission it
 # cannot prompt for ("no output produced — a tool required the <x> permission
@@ -69,9 +82,13 @@ trap 'rm -f "$agy_out" "$agy_err"; exit 143' TERM
 # diagnostics still reach the caller exactly as they did before.
 agy --mode plan --sandbox --add-dir "$PWD" --print-timeout "${budget_secs}s" -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
 agy_pid=$!
-waited=0
+# Wall clock, not an iteration count: each loop pass costs a kill -0, a sleep and
+# scheduler latency, so counting passes overshoots on a loaded host and stalls
+# entirely across a suspend — and the PTY fallback below already computes its own
+# remaining budget from `date`, so a counter here makes the two disagree.
+deadline=$(( started + budget_secs ))
 while kill -0 "$agy_pid" 2>/dev/null; do
-  if [ "$waited" -ge "$budget_secs" ]; then
+  if [ "$(date +%s)" -ge "$deadline" ]; then
     kill -TERM "$agy_pid" 2>/dev/null || :
     sleep 2
     kill -KILL "$agy_pid" 2>/dev/null || :
@@ -79,7 +96,6 @@ while kill -0 "$agy_pid" 2>/dev/null; do
     break
   fi
   sleep 1
-  waited=$(( waited + 1 ))
 done
 wait "$agy_pid" 2>/dev/null || rc=$?
 cat "$agy_err" >&2
@@ -96,6 +112,16 @@ out=$(cat "$agy_out")
 rm -f "$agy_out"
 if [ -n "$out" ]; then
   printf '%s\n' "$out"
+  # Non-zero with output means agy died part-way through its answer: every line
+  # of a half-written finding-jsonl is still valid JSON on its own, so a format
+  # check downstream cannot tell it from a complete review. The text is kept
+  # (unlike the watchdog-kill branch, where the budget is provably gone), but
+  # the exit status must not claim success — a caller that ignores it and
+  # commits the round records unreviewed code as reviewed.
+  if [ "$rc" -ne 0 ]; then
+    printf 'agyask: agy exited %s after writing output — treat this answer as possibly truncated, not a completed review.\n' "$rc" >&2
+    exit "$rc"
+  fi
   exit 0
 fi
 # The PTY fallback exists for the stdout-flushing bug, not for permission
