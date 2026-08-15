@@ -57,25 +57,46 @@ def strip_ansi(s: str) -> str:
     return ANSI_RE.sub("", s)
 
 
-def _drain(proc, chunks: list) -> None:
+def _drain(proc, chunks: list, budget: int) -> int:
     """POSIX final drain: pull any bytes still buffered on the pty master after the
-    child has exited, so trailing output written just before exit is not lost."""
+    child has exited, so trailing output written just before exit is not lost.
+
+    Returns the number of bytes appended. `budget` is what is left of MAX_BYTES:
+    draining without it let a run sitting just under the cap append the whole pty
+    buffer on top of it, so the cap the read loop enforces did not bind at exit."""
+    drained = 0
     while True:
+        if drained >= budget:
+            return drained
         try:
             rlist, _, _ = select.select([proc.fd], [], [], 0)
         except (OSError, ValueError):
-            return
+            return drained
         if not rlist:
-            return
+            return drained
         try:
             data = proc.read(4096)
         except EOFError:
-            return
+            return drained
         except Exception:
-            return
+            return drained
         if not data:
-            return
+            return drained
         chunks.append(data)
+        drained += len(data)
+
+
+def _reap(proc) -> None:
+    """Kill and reap the child on an early-return path. The read loop can end with
+    agy still alive (EOF on the pty, a decode-garbage bail), and returning without
+    this leaves it running with nobody reading it — the orphan that eventually
+    shows up as 'out of pty devices'."""
+    try:
+        if proc.isalive():
+            proc.terminate(force=True)
+        proc.wait()
+    except Exception:
+        pass
 
 
 def resolve_agy_path(explicit: str | None) -> str | None:
@@ -222,7 +243,7 @@ def main() -> int:
                     # window between select() timing out and this isalive() check.
                     # Drain everything still readable (timeout 0) before breaking so
                     # trailing output is never dropped.
-                    _drain(proc, chunks)
+                    total += _drain(proc, chunks, MAX_BYTES - total)
                     break
                 continue
             try:
@@ -233,7 +254,7 @@ def main() -> int:
                 break
             if not data:
                 if not proc.isalive():
-                    _drain(proc, chunks)
+                    total += _drain(proc, chunks, MAX_BYTES - total)
                     break
                 continue
             chunks.append(data)
@@ -257,12 +278,17 @@ def main() -> int:
         sys.stderr.write(
             "agy_pty_wrapper: agy produced more than %d bytes; killed it and discarded the output.\n" % MAX_BYTES
         )
+        _reap(proc)
         return 2
     # Invalid bytes decode to U+FFFD. A reply that is mostly replacement characters
     # is not an answer, but it is non-empty, so the emptiness test below would have
     # called it a completed review.
-    if clean and clean.count("\ufffd") > len(clean) // 10:
+    # `len(clean) // 10` is 0 for anything under ten characters, so a single bad
+    # byte in a short but valid reply tripped this. Require enough text for a
+    # ratio to mean anything before applying it.
+    if len(clean) >= 10 and clean.count("\ufffd") > len(clean) // 10:
         sys.stderr.write("agy_pty_wrapper: output is mostly undecodable bytes; discarding.\n")
+        _reap(proc)
         return 2
     if timed_out:
         # Same rule agyask applies to a watchdog kill: whatever arrived before the
@@ -273,6 +299,7 @@ def main() -> int:
             "agy_pty_wrapper: timed out; discarding %d bytes of partial output.\n"
             % len(clean)
         )
+        _reap(proc)
         return 2
     # A PTY merges the child's stderr into the same stream, so a failing agy's
     # diagnostics look exactly like an answer: non-empty text, exit 0. Ask the

@@ -53,17 +53,41 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
     # A lock left behind by a SIGKILLed installer would otherwise block every
     # future install forever, with no way to tell it from a live one. The pid
     # file makes that decision mechanical.
+    # mkdir fails for two very different reasons: someone holds the lock, or we
+    # cannot write here at all (read-only mount, sandbox, wrong owner). Only the
+    # first is a lock conflict; reporting the second as one sent the reader
+    # hunting for a nonexistent stale lock.
+    if [ ! -d "$LOCK" ]; then
+      printf '  [FAIL] cannot create %s — the destination is not writable by this process.\n' "$LOCK"
+      exit 1
+    fi
     _owner=$(cat "$LOCK/pid" 2>/dev/null || echo "")
-    if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
+    if [ -z "$_owner" ]; then
+      # A missing pid is indeterminate, not stale: the holder takes the lock with
+      # mkdir and writes its pid on the next line, so a racer landing in that gap
+      # would otherwise declare a live lock dead and delete it. Give it a moment.
+      sleep 2
+      _owner=$(cat "$LOCK/pid" 2>/dev/null || echo "")
+      [ -n "$_owner" ] || { printf '  [FAIL] install lock at %s has no owner pid — remove it by hand if no install is running.\n' "$LOCK"; exit 1; }
+    fi
+    if kill -0 "$_owner" 2>/dev/null; then
       printf '  [FAIL] another install is running (pid %s). Wait for it to finish.\n' "$_owner"
       exit 1
     fi
-    printf '  [warn] stale install lock from pid %s — taking it over.\n' "${_owner:-unknown}"
-    rm -rf "$LOCK"
+    printf '  [warn] stale install lock from pid %s — taking it over.\n' "$_owner"
+    # Rename-then-delete, not `rm -rf` + `mkdir`: an unconditional clear lets two
+    # installers reading the same dead pid both re-create the lock and both win.
+    # Only one rename of a given directory can succeed, so the loser's `mv` fails
+    # and it re-tests the lock instead of installing concurrently.
+    mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null || { printf '  [FAIL] lost the race to take over the stale lock at %s — re-run the install.\n' "$LOCK"; exit 1; }
+    rm -rf "$LOCK.stale.$$"
     mkdir "$LOCK" || { printf '  [FAIL] could not take the install lock at %s\n' "$LOCK"; exit 1; }
   fi
   printf '%s\n' "$$" > "$LOCK/pid"
-  trap 'rm -rf "$LOCK" 2>/dev/null || :' EXIT INT TERM
+  # Remove only a lock we still own. After a takeover the previous holder is dead,
+  # but the fresh-lock race above is not the only way two installers can overlap,
+  # and an unconditional rm here deletes the *other* installer's lock on exit.
+  trap '[ "$(cat "$LOCK/pid" 2>/dev/null || echo "")" = "$$" ] && rm -rf "$LOCK" 2>/dev/null; :' EXIT INT TERM
 
   # Per-file atomic replace, never a directory swap. A directory swap always has
   # a window where the target does not exist, and a live shim exec'ing its
