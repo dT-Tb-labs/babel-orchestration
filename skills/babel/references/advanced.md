@@ -186,8 +186,9 @@ export const meta = {
 // at 0 agents with a message that blames the caller for a harness detail.
 const A = typeof args === 'string' ? (() => { try { return JSON.parse(args) } catch { return null } })() : args
 if (!A || !A.diff || !A.spec || typeof A.diffLines !== 'number' ||
-    typeof A.round !== 'number' || !A.digest || !A.receiptToken) {
-  throw new Error('babel-acceptance-review requires args {diff, spec, diffLines, round, digest, receiptToken}')
+    typeof A.round !== 'number' || !A.digest ||
+    !Array.isArray(A.receiptTokens) || A.receiptTokens.length !== 2) {
+  throw new Error('babel-acceptance-review requires args {diff, spec, diffLines, round, digest, receiptTokens:[a,b]}')
 }
 const CHANGESET = A.diff
 const SPEC = A.spec
@@ -197,14 +198,14 @@ const MAX_FINDINGS = 20   // per dimension group; each one spawns an Opus verifi
 // prompt otherwise names only a *path*. Rebuild the payload at that path — a later
 // round, a re-run, another task — and the cached findings come back attributed to
 // bytes no agent read. Digest in the prompt makes changed bytes a cache miss.
-// `receiptToken` is the exact opposite and MUST NOT be interpolated into any prompt:
-// it lives only at the end of the diff file, so echoing it is the one thing a reviewer
-// cannot do without having read the payload through (protocol.md §2). Putting it here
-// would turn the receipt back into a formality the model can satisfy from the prompt.
+// `receiptTokens` is the exact opposite and MUST NOT be interpolated into any prompt:
+// the two markers live only inside the diff file — one in its first quarter, one on
+// its last line — so echoing both is the one thing a reviewer cannot do from the
+// prompt alone, nor from reading a single end of the payload (protocol.md §2).
 const CONTEXT = `TaskPacket: {"goal":"acceptance review of the changeset","files":[{"path":"${CHANGESET}"},{"path":"${SPEC}"}],"inputs":["${CHANGESET}","${SPEC}"],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
 Round ${A.round}. The payload at ${CHANGESET} has sha256 ${A.digest}; review that content, not a remembered version of it.
 Read those two paths — they are your only inputs (protocol.md §2 access list). Report in protocol.md's finding-jsonl format: severity(C/H/M/L), file, line, claim, evidence(~10-25 words) required. Exclude speculation and style preferences. Report at most ${MAX_FINDINGS} findings, highest severity first, and set moreFindingsExist to true only if you actually had to drop findings to fit that limit.
-Return a receipt (protocol.md §2): receipt.token is the value on the \`babel-receipt-token:\` line at the END of ${CHANGESET} — read it there and copy it exactly; receipt.paths lists the files you actually read; receipt.dimensions lists which of your assigned dimensions you actually covered; receipt.unread lists any dispatched path you did not read. A review that reports no findings still returns the receipt.`
+Return a receipt (protocol.md §2): receipt.tokens is [the value on the \`babel-receipt-token-a:\` line, which is somewhere in the first quarter of ${CHANGESET}, the value on the \`babel-receipt-token-b:\` line, which is its last line] — read both there and copy them exactly, in that order; receipt.paths lists the files you actually read; receipt.dimensions lists which of your assigned dimensions you actually covered; receipt.unread lists any dispatched path you did not read. A review that reports no findings still returns the receipt.`
 
 const FINDING_SCHEMA = {
   type: 'object',
@@ -220,12 +221,12 @@ const FINDING_SCHEMA = {
     receipt: {
       type: 'object',
       properties: {
-        token: { type: 'string' },
+        tokens: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2 },
         paths: { type: 'array', items: { type: 'string' } },
         dimensions: { type: 'array', items: { type: 'string' } },
         unread: { type: 'array', items: { type: 'string' } },
       },
-      required: ['token', 'paths', 'dimensions', 'unread'],
+      required: ['tokens', 'paths', 'dimensions', 'unread'],
     },
     findings: {
       type: 'array',
@@ -251,13 +252,30 @@ const FINDING_SCHEMA = {
 
 // The receipt ingestion gate (protocol.md §7), mechanised. Runs before anything in
 // the response is read as a review result — including an empty findings list.
+const DISPATCHED = [CHANGESET, SPEC]
 const receiptFailure = (res, keys) => {
   const r = res && res.receipt
   if (!r) return 'receipt missing'
-  if (r.token !== A.receiptToken) return 'receipt token does not match the dispatched payload'
+  // Both markers, in order. Either alone is one end of the payload, which a
+  // last-line or first-chunk read produces without reviewing anything.
+  if (!Array.isArray(r.tokens) || r.tokens.length !== 2) return 'receipt.tokens must be [a, b]'
+  if (r.tokens[0] !== A.receiptTokens[0] || r.tokens[1] !== A.receiptTokens[1]) {
+    return 'receipt tokens do not match the dispatched payload'
+  }
   if (!Array.isArray(r.paths) || !r.paths.length) return 'receipt.paths empty — nothing was read'
-  const outside = r.paths.filter(p => typeof p !== 'string' || p.startsWith('/') || p.split('/').includes('..'))
+  // A dispatched path is accepted as given — the lead may pass it absolute — while
+  // anything else must be a repo-relative path under the root. A cross-file finding
+  // legitimately cites a caller the changeset does not contain (protocol.md §7), so
+  // the test is escape-from-root, not membership of the dispatched set.
+  const outside = r.paths.filter(p => typeof p !== 'string' ||
+    (!DISPATCHED.includes(p) && (p.startsWith('/') || p.split('/').includes('..'))))
   if (outside.length) return `receipt.paths outside the repo root: ${outside.join(', ')}`
+  if (!Array.isArray(r.unread)) return 'receipt.unread missing'
+  const strayUnread = r.unread.filter(p => !DISPATCHED.includes(p))
+  if (strayUnread.length) return `receipt.unread names paths never dispatched: ${strayUnread.join(', ')}`
+  // "I read nothing you sent me", spelled out. Without this the reviewer can declare
+  // the changeset unread and still return the empty-findings shape as a clean sweep.
+  if (DISPATCHED.every(p => r.unread.includes(p))) return 'receipt.unread covers the entire dispatched payload'
   const covered = new Set(Array.isArray(r.dimensions) ? r.dimensions : [])
   const missing = keys.filter(k => !covered.has(k))
   if (missing.length) return `assigned dimensions not covered: ${missing.join(', ')}`
@@ -407,12 +425,14 @@ The return names are deliberate: **`upheld`, never `confirmed`** — `confirmed`
 
 A non-empty `failedDimensions` means that dimension was never reviewed — the round is not a candidate clean round no matter how few findings came back, and the dimension is re-dispatched or declared dropped to the user. A non-empty `cappedDimensions` means that dimension returned as many findings as the cap allows and dropped the rest: it was truncated, not covered, so re-dispatch it on the narrowed scope before reading the round as converged. A non-empty `unresolved` is a §7 schema-gate failure, not a clean result: re-request that batch once, and if it comes back short again treat the track as degraded for the round (protocol.md §10) rather than reporting those C/H as if nobody found them. At merge time the lead normalizes the Workflow's schema output into finding-jsonl + global ID. Without the Workflow tool, substitute Agent-parallel review for the dimension-split review.
 
-**Launch**: `Workflow({scriptPath, args: {diff, spec, diffLines, round, digest, receiptToken, fold?}})` — `diff` is the
+**Launch**: `Workflow({scriptPath, args: {diff, spec, diffLines, round, digest, receiptTokens, fold?}})` — `diff` is the
 path chosen by the round rule in the script's header comment, `diffLines` its
 changed-line count per the header comment (never `wc -l` of the diff file).
-`round` is the dispatch index; `digest` is `shasum -a 256 "$diff" | cut -c1-16` taken
-**after** the receipt token was appended, so it covers the exact bytes the reviewers
-get; `receiptToken` is the value on that appended line. Build all three in the same
+`round` is the dispatch index; `digest` is the 4th field of the payload step's token
+record — `shasum -a 256` of the stamped payload, taken **after** both markers were
+planted, so it covers the exact bytes the reviewers get; `receiptTokens` is `[a, b]`
+in that order. The lead holds the plaintext pair only in-flight, for this one launch;
+what it persists is hashes (patterns.md). Build all three in the same
 step that builds the payload (patterns.md acceptance-gate, "Assert the payload"), never
 by hand: a `digest` copied from the previous round is a resume cache hit on stale
 findings, which is the failure `digest` exists to prevent. The
@@ -500,25 +520,35 @@ Within one task, autonomously adjust channel composition with **no human gate**.
   negative — it fires on `refuted≥2`, which a channel must *say something* to earn.
   A channel that answers `NONE` every round accumulates neither `confirmed` nor
   `refuted`, so it is never dropped, and returning nothing becomes the cheapest way
-  to buy the appearance of review for the whole task. So count **missed rounds**:
-  a round in which that channel's entry has `emitted:0` (protocol.md §5) **and** the
-  round produced at least one grounded `confirmed`, from any channel, over scope
-  that channel was also dispatched. **Two missed rounds → drop it for the task**,
-  reported as "produced no positive evidence on rounds where defects were found",
-  which is a different sentence to the user than the false-positive drop and should
-  stay different.
-  The co-occurrence condition is the whole design: a channel is silent on a genuinely
-  clean changeset too, and a bare `emitted:0` counter would drop the entire crew on
-  the first round nobody found anything — punishing the correct answer. Silence only
-  becomes evidence when the same bytes demonstrably contained a real defect. Two
-  such rounds, not one, for the same reason the drop rule needs two entries: on one
-  observation "missed the round everyone else scored on" is an ordinary bad round.
-  What this cannot catch, stated rather than papered over: a channel that emits one
-  cheap plausible finding per round is silent in substance but not by this measure —
-  the fold-on-reward rule below is what reaches that behaviour, since a stream of
-  ungrounded or duplicate findings earns almost no split reward per token. And a
-  channel whose receipt keeps failing never reaches either rule; it is degraded per
-  round by the receipt gate itself (protocol.md §7, §10), which is the faster path.
+  to buy the appearance of review for the whole task. So count **missed rounds**.
+  A round is missed for a channel when **all four** hold: (1) it was dispatched that
+  round and its receipt passed — a channel skipped by change-impact routing, or
+  degraded by the receipt gate, has no entry and cannot miss with it; (2) its entry
+  emitted **zero C/H** — `emitted` counts every severity, but only C/H are groundable,
+  so one throwaway M per round would otherwise buy permanent immunity from both drop
+  rules while saying nothing that can ever be confirmed or refuted; (3) another
+  channel earned a grounded `confirmed` that round; (4) that defect lies in a path
+  **this channel's own receipt lists** (`reviewed_scope.<round>.<channel>`,
+  protocol.md §5), not merely somewhere in the round's scope. **Two missed rounds →
+  drop it for the task**, reported as "produced no groundable finding on rounds where
+  defects were found in files it reviewed" — a different sentence to the user than the
+  false-positive drop, and it should stay different. The two need not be consecutive,
+  but only the **last four entries** are examined: a lifetime counter drops a channel
+  in round 8 for rounds 1 and 2, which is not what "no positive evidence" means.
+  Conditions (1) and (4) are what keep this from punishing correct behaviour, and they
+  are the whole design. A channel is silent on a genuinely clean changeset too, so a
+  bare `emitted:0` counter would drop the entire crew on the first round nobody found
+  anything — punishing the right answer. A channel assigned disjoint dimensions, sat
+  out by routing, or handed a delta that never contained the defect missed nothing:
+  silence is evidence only about bytes that channel actually read and that
+  demonstrably held a real defect. Two such rounds, not one, for the same reason the
+  drop rule needs two entries: on one observation, missing the round everyone else
+  scored on is an ordinary bad round.
+  What this still cannot catch, stated rather than papered over: a channel emitting
+  one cheap *plausible C/H* per round is silent in substance but not by this measure.
+  The fold-on-reward rule below is what reaches it — findings that ground `refuted`,
+  or as duplicates, earn almost no split reward per token — and a stream of refuted
+  ones reaches the false-positive drop rule instead.
 - **Fold on reward before dropping on failure**: the drop rule above needs
   `confirmed=0`, which a channel earning one finding per round never hits no matter
   what it costs. So also compare the split reward across channels each round and

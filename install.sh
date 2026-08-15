@@ -160,23 +160,36 @@ if command -v node >/dev/null 2>&1; then
   # Same temp idiom as the copy step above: a sibling of the destination, which the
   # lock already proved writable. mktemp would put it in TMPDIR, which is exactly the
   # kind of host difference this script keeps getting bitten by.
-  # The .js suffix is required, not cosmetic: `node --check` resolves the module
-  # format from the extension and dies with ERR_UNKNOWN_FILE_EXTENSION on a bare
-  # .tmp.$$ name, which reads as "the A6 script is broken" when it is not.
+  # A workflow script is NOT a standalone module in either format: it carries
+  # `export const meta` (ESM-only) AND a top-level `return` (illegal in ESM) AND
+  # top-level `await`, because the harness runs the body as an async function. So
+  # check it the way the harness loads it — strip the `export` keyword and wrap the
+  # body — rather than trusting an extension. Measured: as .mjs it dies on "Illegal
+  # return statement"; as .js it happened to pass on Node 26 with no package.json
+  # above $DEST, and would fail under one saying "type":"commonjs". Both readings
+  # abort the install claiming the A6 script is broken when it is not.
   a6="$DEST/.babel-a6-check.$$.js"
-  awk '/^```javascript/{f=1;next} f&&/^```$/{exit} f' "$DEST/babel/references/advanced.md" > "$a6"
+  { printf '(async () => {\n'
+    awk '/^```javascript/{f=1;next} f&&/^```$/{exit} f' "$DEST/babel/references/advanced.md" \
+      | sed 's/^export const meta/const meta/'
+    printf '\n})()\n'
+  } > "$a6"
   if node --check "$a6" 2>/dev/null && node -e '
     const fs = require("fs"), src = fs.readFileSync(process.argv[1], "utf8")
     const grab = re => (src.match(re) || [""])[0]
     const fn = grab(/^const receiptFailure[\s\S]*?\n}$/m) + "\n" + grab(/^const LENS = \{[\s\S]*?\n\}$/m)
-    const A = { receiptToken: "tok-good" }
-    const gate = new Function("A", fn + "; return receiptFailure")(A)
+    const A = { receiptTokens: ["tok-a", "tok-b"] }
+    const CHANGESET = "cs.diff", SPEC = "spec.md"
+    const gate = new Function("A", "DISPATCHED", fn + "; return receiptFailure")(A, [CHANGESET, SPEC])
     const keys = ["correctness"]
-    const good = { token: "tok-good", paths: ["a.py"], dimensions: keys, unread: [] }
+    const good = { tokens: ["tok-a", "tok-b"], paths: ["a.py"], dimensions: keys, unread: [] }
     if (gate({ receipt: good }, keys)) throw new Error("valid receipt rejected")
     if (!gate({}, keys)) throw new Error("missing receipt accepted")
-    if (!gate({ receipt: { ...good, token: "tok-other" } }, keys)) throw new Error("wrong token accepted")
+    if (!gate({ receipt: { ...good, tokens: ["tok-a", "tok-x"] } }, keys)) throw new Error("wrong token accepted")
+    if (!gate({ receipt: { ...good, tokens: ["tok-b", "tok-a"] } }, keys)) throw new Error("swapped tokens accepted")
+    if (!gate({ receipt: { ...good, tokens: ["tok-a"] } }, keys)) throw new Error("one-ended receipt accepted")
     if (!gate({ receipt: { ...good, paths: [] } }, keys)) throw new Error("empty paths accepted")
+    if (!gate({ receipt: { ...good, unread: [CHANGESET, SPEC] } }, keys)) throw new Error("all-unread accepted")
   ' "$a6" 2>/dev/null; then
     ok "babel A6 workflow script parses and its receipt gate holds"
     pass=$((pass+1))

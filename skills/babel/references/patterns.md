@@ -107,42 +107,75 @@ lines=$(git apply --numstat "$D" | awk '{a+=$1+$2} END{print a+0}')
 [ "$lines" -gt 0 ] || { echo "void round: changeset has 0 reviewable text lines (binary-only?) — report as void, do not dispatch" >&2; exit 1; }
 ```
 
-**Then mint one receipt token per channel and stamp it into that channel's own copy
+**Then mint a receipt marker pair per channel and plant it in that channel's own copy
 of the payload** (protocol.md §2). One shared copy cannot carry per-channel tokens,
 and a shared token is one a channel can copy from a sibling's answer, so each channel
 gets its own file — the bytes above the token line are identical, so this costs a `cp`:
 
 ```bash
-# $SRC is whatever this round dispatches to that channel — the changeset on round 1,
-# that channel's own delta from round 2 on (per-channel already, see (c) below).
+: > "$TOKENS"          # per round, never appended across retries: a stale token from
+                       # an earlier attempt would still validate a replayed response
 for ch in claude sol agy; do
-  SRC="$D"   # round ≥2: .babel/<task>/inbox/delta-r<N>[-$ch].diff
+  # Round 1 dispatches the changeset; from round 2 each channel gets its OWN delta,
+  # so resolve $SRC per channel. A constant here is the defect A6's header warns
+  # about in the other direction: every channel silently re-reviews round 1.
+  SRC="$D"                                     # round 1
+  [ "<N>" -gt 1 ] && SRC=$(ls ".babel/<task>/inbox/delta-r<N>-$ch.diff" \
+                              ".babel/<task>/inbox/delta-r<N>.diff" 2>/dev/null | head -1)
+  [ -n "$SRC" ] || exit 1
   P=".babel/<task>/inbox/changeset-r<N>-$ch.diff"
-  # `|| exit` is load-bearing: on a failed copy the append below still succeeds and
-  # creates a file whose only line is the token, so the channel receives an empty
+  # `|| exit` is load-bearing: on a failed copy the appends below still succeed and
+  # create a file whose only lines are tokens, so the channel receives an empty
   # payload it can produce a perfect receipt for — the void round the receipt exists
   # to expose, reintroduced by the stamping step itself. Measured: without it, a
   # missing $SRC yields a 1-line payload and a valid token.
   cp "$SRC" "$P" || exit 1
-  tok="r<N>-$(openssl rand -hex 4)"
-  printf 'babel-receipt-token: %s\n' "$tok" >> "$P"     # last line, on purpose
-  [ "$(wc -l < "$P")" -gt 1 ] || exit 1                 # payload is more than the token
-  printf '%s %s %s\n' "$ch" "$tok" "$(shasum -a 256 "$P" | cut -c1-16)" \
-    >> "$TOKENS"                                       # the lead's copy, never sent
+  # A diff whose last line is "\ No newline at end of file" has no trailing newline,
+  # and the append would then land on that line instead of its own.
+  [ -z "$(tail -c 1 "$P")" ] || printf '\n' >> "$P"
+  # TWO tokens, at opposite ends. One at the end alone is satisfiable by reading the
+  # last line — `tail`, or an LLM's final-chunk read — which is not review. Requiring
+  # a marker from the first quarter AND one from the end means neither end alone
+  # produces a valid receipt. This raises the floor; it does not prove comprehension.
+  a="r<N>-$(openssl rand -hex 4)"; b="r<N>-$(openssl rand -hex 4)"
+  q=$(( $(wc -l < "$P") / 4 + 1 ))
+  awk -v n="$q" -v t="$a" 'NR==n{print "babel-receipt-token-a: " t} {print}' "$P" > "$P.tmp" \
+    && mv "$P.tmp" "$P"
+  printf 'babel-receipt-token-b: %s\n' "$b" >> "$P"
+  [ "$(wc -l < "$P")" -gt 2 ] || exit 1                 # payload is more than the tokens
+  # Store the token HASHES, never the tokens. SOL runs outside the sandbox, so an
+  # answer key in a predictable path — `.babel/`, /tmp, anywhere — is a cheaper way
+  # to pass the gate than reading the payload. A hash validates a response and
+  # discloses nothing to whoever finds the file.
+  printf '%s %s %s %s\n' "$ch" \
+    "$(printf '%s' "$a" | shasum -a 256 | cut -c1-16)" \
+    "$(printf '%s' "$b" | shasum -a 256 | cut -c1-16)" \
+    "$(shasum -a 256 "$P" | cut -c1-16)" >> "$TOKENS"   # 4th field = args.digest (§A6)
 done
 ```
 
-`TOKENS` is a path **outside the repository** — `TOKENS="${TMPDIR:-/tmp}/babel-<task>-r<N>-tokens.txt"`. Not `.babel/`, and not anywhere else under the repo root: SOL is dispatched with `--cwd "<repo>"` and can read any file in it, so a token list stored in-repo is a cheaper way to satisfy the receipt than reading the payload — which is precisely the behaviour the receipt exists to detect. Keeping the answer key out of the answerer's reach is what makes the token evidence rather than decoration. It never enters a payload, a prompt, or a `--cwd` scope, and it is regenerated every round, so losing it costs one re-dispatch and nothing else.
+`TOKENS` holds **hashes, not tokens**, and lives outside the repository —
+`TOKENS="${TMPDIR:-/tmp}/babel-<task>-r<N>-tokens.txt"`. Both halves matter and
+neither is sufficient. Outside the repo, because SOL is dispatched with
+`--cwd "<repo>"` and can read anything in it. Hashed, because `solask` also runs
+**outside the Claude Code sandbox**, so "outside the repo" is not out of reach — the
+path is derivable from the task slug and round, and a plaintext list anywhere on the
+filesystem is a cheaper way to pass the gate than reading the payload. A hash
+validates a response and gives whoever finds the file nothing. Regenerated every
+round, so losing it costs one re-dispatch.
 
-The token goes **at the end** because that is what makes echoing it evidence: a
-channel that answers from the first screen of the diff cannot produce it. It is never
-repeated in the prompt — the prompt says only where to find it (protocol.md §2), and a
-template that inlines it for convenience silently converts the receipt back into a
-formality. Keep `receipt-tokens.txt` out of every dispatched payload and out of any
-`--cwd` scope you hand a channel; a channel that can read the token file can pass the
-gate without reading anything else. The digest recorded alongside it is taken **after**
-the append, so it covers the exact bytes that channel receives, and it is what
-`advanced.md` §A6 takes as `args.digest` for the Claude track.
+The tokens sit at **opposite ends** of the payload, and both are required. One token
+at the end is satisfiable by reading the last line — `tail`, or a model's final-chunk
+read — which is exactly the non-review the receipt exists to catch; a marker in the
+first quarter plus one at the end means neither end alone produces a valid receipt.
+Neither is ever repeated in the prompt — the prompt says only where to find them
+(protocol.md §2), and a template that inlines one for convenience converts the receipt
+back into a formality. **Stated plainly: this bounds the cheapest lazy behaviours, it
+does not prove the payload was understood.** A channel that greps both markers still
+passes. What catches that is grounding, and the silence rule for a channel that never
+produces a groundable finding. The payload digest recorded as the 4th field is taken
+**after** both appends, so it covers the exact bytes that channel receives, and it is
+what `advanced.md` §A6 takes as `args.digest` for the Claude track.
 
 Validate every response against this file before ingesting it (protocol.md §7 receipt
 ingestion gate): wrong token, absent token, empty `paths` → channel failure, re-request
@@ -167,7 +200,7 @@ Three ways this comes back zero, all of which otherwise read as a clean round: t
      - **under 50 lines → 1 agent** carrying all four dimensions in one prompt (pilot 1 showed 3 reviewers excessive for 44 lines);
      - **50-200 → 2 agents**: `correctness + edge-cases` / `security + spec-compliance`;
      - **over 200 → 3 agents**: `correctness` / `security` / `edge-cases + spec-compliance`.
-     Do not hand-set the grouping in the template: pass the measured **changed-line count** (added+removed, not the diff file's `wc -l` — context lines inflate it 2-3×) as `args.diffLines` and A6 selects the bracket itself (it is not fixed at four agents). Pass `round`, `digest` and `receiptToken` from the payload step too — the digest is what keeps a resumed run from replaying findings against a rebuilt payload, and the token is what the receipt gate checks (`advanced.md` §A6).
+     Do not hand-set the grouping in the template: pass the measured **changed-line count** (added+removed, not the diff file's `wc -l` — context lines inflate it 2-3×) as `args.diffLines` and A6 selects the bracket itself (it is not fixed at four agents). Pass `round`, `digest` and `receiptTokens` from the payload step too — the digest is what keeps a resumed run from replaying findings against a rebuilt payload, and the marker pair is what the receipt gate checks (`advanced.md` §A6).
    - (b) agy: request review of the changeset's diff hunks inline.
    - (c) SOL normal: pass the changeset path via `.babel/<task>/inbox/` and request review.
    - (b)(c) dispatch simultaneously via `run_in_background`. (a) runs inside the lead's session.
@@ -190,7 +223,7 @@ Run correctness / security / edge-cases / spec-compliance through `pipeline()` i
  "criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
 ```
 ```bash
-solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. First line of your answer is the receipt: {\"receipt\":{\"token\":\"<the value on the babel-receipt-token line at the END of the diff — read it there>\",\"paths\":[\"<files you actually read>\"],\"dimensions\":[\"correctness\",\"security\",\"edge-cases\",\"spec-compliance\"],\"unread\":[\"<dispatched paths you did not read>\"]}}. Then output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) after the receipt line if clean — the receipt is required either way. No prose."
+solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. First line of your answer is the receipt: {\"receipt\":{\"tokens\":[\"<the value on the babel-receipt-token-a line, somewhere in the first quarter of the diff>\",\"<the value on the babel-receipt-token-b line, the diff's last line>\"],\"paths\":[\"<files you actually read>\"],\"dimensions\":[\"correctness\",\"security\",\"edge-cases\",\"spec-compliance\"],\"unread\":[\"<dispatched paths you did not read>\"]}}. Then output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) after the receipt line if clean — the receipt is required either way. No prose."
 ```
 `run_in_background: true` (bound = solask's ~9 min cap, not the Bash `timeout: 600000`; protocol.md §8). For critical acceptance of a security/irreversible L task, swap in `--tier deep` (see the cost discipline in SKILL.md).
 
@@ -200,14 +233,17 @@ solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<
 
 ```
 TaskPacket: {"goal":"full review of changeset","files":[{"path":"<diff hunk summary>"}],"inputs":[],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
-Diff hunk: <the changed diff hunks, with agy's babel-receipt-token line as the last line of this block>
-First line of your answer is the receipt: {"receipt":{"token":"<the value on the babel-receipt-token line at the END of the diff hunk block above>","paths":["<files the hunks came from that you reviewed>"],"dimensions":["correctness","security","edge-cases","spec-compliance"],"unread":["<hunks you did not review>"]}}
+Diff hunk: <the changed diff hunks, carrying agy's babel-receipt-token-a line in their first quarter and its babel-receipt-token-b line as the block's last line>
+First line of your answer is the receipt: {"receipt":{"tokens":["<the value on the babel-receipt-token-a line in the first quarter of the hunk block above>","<the value on the babel-receipt-token-b line at the end of that block>"],"paths":["<files the hunks came from that you reviewed>"],"dimensions":["correctness","security","edge-cases","spec-compliance"],"unread":["<hunks you did not review>"]}}
 Then output one JSON array per line: ["<id>","<sev C|H|M|L>","<file>",<line>,"<claim>","<evidence ~10-25 words>"]. Example: ["F1","C","auth.py",42,"token expiry unchecked","verify_token() decodes JWT without checking exp claim"]. Output NONE (single word) after the receipt line if clean — the receipt is required either way. No prose. Do not use any tools — answer directly from the text given above.
 ```
 
-agy's copy of the token goes at the end of the **inlined hunk block**, not in a file it
-cannot read (protocol.md §1). That proves the payload was read through, which is the
-strongest receipt an inline channel can give; do not read agy's `paths` as file access.
+agy's markers go inside the **inlined hunk block**, not in a file it cannot read
+(protocol.md §1) — which unavoidably puts them in the prompt. That is the documented
+inline exception (§2), and it is weaker: it evidences reading the block, not opening a
+file. Do not read agy's `paths` as file access. When a round is split into parts (§3),
+each part carries **its own pair** and is validated separately; a part whose receipt
+fails is a failure of that part, and the round's agy coverage is the parts that passed.
 
 then dispatch it:
 
