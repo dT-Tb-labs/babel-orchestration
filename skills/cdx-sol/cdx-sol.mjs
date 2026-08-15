@@ -61,6 +61,12 @@ function guardOutput(text, cwd, offloadChars = OFFLOAD_CHARS) {
   if (body.length <= offloadChars) return { rendered: body, offloaded: null };
   try {
     const dir = path.join(cwd, ".sol");
+    // The reviewed repository is untrusted input. If `.sol` is a symlink, this
+    // wrapper — which may be running outside the sandbox — writes model-controlled
+    // bytes wherever it points. A real directory or nothing.
+    const st = fs.lstatSync(dir, { throwIfNoEntry: false });
+    if (st && !st.isDirectory()) throw new Error(`${dir} exists and is not a directory`);
+    if (st && fs.realpathSync(dir) !== path.resolve(dir)) throw new Error(`${dir} is a link`);
     fs.mkdirSync(dir, { recursive: true });
     // Write the ignore rule once. Rewriting it every call silently discarded any
     // edit the user had made to that file.
@@ -84,9 +90,17 @@ function guardOutput(text, cwd, offloadChars = OFFLOAD_CHARS) {
       rendered: `${head}\n\n[...truncated ${body.length} chars. Full output: ${file}]`,
       offloaded: file,
     };
-  } catch {
-    // Never lose SOL output: if the workspace isn't writable, return it in full.
-    return { rendered: body, offloaded: null };
+  } catch (e) {
+    // The offload failed (unwritable workspace, disk full, a hostile `.sol`).
+    // Returning the whole answer on stdout instead was worse than it looked: the
+    // caller's own output cap then truncates it somewhere upstream, with no marker,
+    // and a truncated review that still parses reads as a complete one. Emit the
+    // same bounded, explicitly-marked prefix the success path emits.
+    const head = body.slice(0, 2000);
+    return {
+      rendered: `${head}\n\n[...truncated ${body.length} chars. Offload FAILED (${e.message}) — the rest of this answer is lost, not stored.]`,
+      offloaded: null,
+    };
   }
 }
 

@@ -26,11 +26,16 @@ blackboard `state.json` round counter + `rejected` list suffices.
   snapshot names which paths moved; the hunks come from `.babel/<task>/snap-r<N>/`,
   which holds a verbatim copy of each changeset file as that round dispatched it,
   under its repo-relative path. The delta is then per moved path
-  `diff -u --strip-trailing-cr ".babel/<task>/snap-r<last_seen>/<p>" "<p>"` (quoted on
+  `diff -u --strip-trailing-cr -- ".babel/<task>/snap-r<last_seen>/<p>" "<p>"` (quoted on
   both sides — an unquoted path containing a space or a newline compares the wrong
-  files or nothing at all, and that path's hunks then never reach the channel)
+  files or nothing at all, and that path's hunks then never reach the channel; `--`
+  because a repo-relative path beginning with a dash is otherwise parsed as an
+  option and that path's repair silently leaves the delta)
   (`--strip-trailing-cr` because a repo whose `.gitattributes` normalizes line
-  endings would otherwise report every line as changed), with
+  endings would otherwise report every line as changed — the cost is that a change
+  which is *only* line endings produces an empty delta, so a path whose diff comes
+  back empty while the snapshot bytes differ must be reported as changed-but-not-
+  diffed, never dropped), with
   `/dev/null` standing in for whichever side is absent when a path was added or
   deleted since that round — real source hunks. The delta is **per channel**, from
   `snap-r<that channel's last_seen>`: a channel that failed, sat a round out, or
@@ -212,7 +217,10 @@ const FINDING_SCHEMA = {
       },
     },
   },
-  required: ['findings'],
+  // moreFindingsExist is the only signal that the cap cost coverage, so it is
+  // required: a truncated response with fewer than MAX_FINDINGS entries and no
+  // flag was otherwise indistinguishable from complete coverage.
+  required: ['findings', 'moreFindingsExist'],
 }
 
 // One call verifies a batch, not one finding (§A8). `i` keys the verdict back to
@@ -371,7 +379,8 @@ template has been edited back toward the expensive shape.
 
 ## A7. Cost-tier details
 
-- SOL tier: checkpoint and S acceptance=quick / design and M/L acceptance=normal / stuck-diagnosis and critical acceptance=deep.
+- SOL tier: checkpoint=quick / design and M/L acceptance=normal / stuck-diagnosis and critical acceptance=deep.
+  **S acceptance dispatches no SOL at all** (SKILL.md Phase 0, patterns.md acceptance-gate); the tier table here never authorises one.
   "critical acceptance" = L **and** security/irreversible task's acceptance SOL only.
 - **deep cap = 2 per task** (ask the user past that).
 

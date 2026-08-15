@@ -107,6 +107,13 @@ lines=$(git apply --numstat "$D" | awk '{a+=$1+$2} END{print a+0}')
 [ "$lines" -gt 0 ] || { echo "void round: changeset has 0 reviewable text lines (binary-only?) — report as void, do not dispatch" >&2; exit 1; }
 ```
 
+Binary paths contribute 0 to this count without making it 0, so a changeset of one
+text edit plus one changed binary passes the gate while the binary goes unreviewed —
+reviewers see only "Binary files ... differ". Enumerate every binary path in the
+dispatch record as an **uncovered artifact** and carry it into the acceptance report
+as residual risk; a round covering only the text half is not a clean round for the
+whole changeset.
+
 Three ways this comes back zero, all of which otherwise read as a clean round: the task genuinely changed nothing; the write failed or `.babel/` was wiped between build and dispatch; or the changeset is real but has no reviewable text (binary blobs, `Binary files … differ`). The first is "nothing to review" and the gate does not run at all. The other two are **void rounds** — report them as such, never as convergence. Write the byte count and the changed-line count into the dispatch record, and treat any channel's `NONE` against a payload of 0 bytes as a channel failure (protocol.md §4). For spec-compliance review, distribute `.babel/<task>/spec.md` the same way (inline the essentials for agy).
 
 ### Procedure
@@ -166,7 +173,7 @@ AGY_PRINT_TIMEOUT=240s agyask "$(cat .babel/<task>/inbox/agy-r<N>.txt)"
 1. **Fingerprint dedup**: match on `{path, symbol (function name / spec section ID), violated invariant}`. Do not use line numbers in the dedup key (protocol.md §7). Matching is a semantic comparison by the lead.
 2. Match against **both** the already-reported and already-rejected lists (prevents re-surfacing loops).
 3. Verify C/H only: batch 8–12 surviving findings per call. If a repro can run, verify with the reproduction command / failing test; if not, substitute an invariant argument (protocol.md §7, same section for repro safety rules).
-   **Ground SOL findings on small diffs**: under 50 lines, SOL acceptance has more false positives (pilot 1 reported nonexistent trailing whitespace). Before adopting an SOL-only finding, confirm actual file lines; multi-system agreement may raise priority. Apply this to S SOL-quick acceptance too.
+   **Ground SOL findings on small diffs**: under 50 lines, SOL acceptance has more false positives (pilot 1 reported nonexistent trailing whitespace). Before adopting an SOL-only finding, confirm actual file lines; multi-system agreement may raise priority. (S acceptance dispatches no SOL — SKILL.md Phase 0 — so this applies to SOL's checkpoint and M/L acceptance findings, not to any S review.)
 4. Fix verified findings only. **Re-ground before repair** against primary sources (`canon` / actual file line) and confirm the premise; never trust an audit finding as-is. This is a premise re-check against the file as it stands now — an earlier fix may have moved or already closed it — not a second grounding event: the finding keeps the one `confirmed`/`refuted` label step 3 gave it, and nothing is appended to `channel_scoreboard` here (protocol.md §7, "each is grounded once"). Pilot 2's R4 re-grounding prevented 2 false detections. Every repair TaskPacket must include constraint: `before fixing, re-ground against canon and confirm the finding's premise.`
 5. Re-run with **change-impact routing**: re-dispatch only the reviewers whose previous scope or unresolved findings intersect the fixed file/function (not unrelated reviewers). **For L multi-round, further narrow crew composition with `channel_scoreboard`** (protocol.md §5) — drop from the next round any channel with grounding confirmed=0 and refuted≥2 over the last 2 rounds (within-task online adaptation, `advanced.md` §A9). Each finding's grounding outcome (confirmed/refuted) is appended to the scoreboard at this merge stage (lead exclusively).
 6. Output M/L in line form like C/H, but do not verify or fix them. Present them to the user in the final report.

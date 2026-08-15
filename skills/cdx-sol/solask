@@ -23,4 +23,35 @@ set -eu
 export CLAUDE_PLUGIN_DATA
 mkdir -p "$CLAUDE_PLUGIN_DATA"
 
-exec node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" "$@"
+# This shim is sandbox-excluded, so anything it executes runs with the user's full
+# access. Two consequences, both of which cost nothing to close:
+#
+# 1. CDX_SOL_COMPANION makes cdx-sol.mjs execute an arbitrary path. Reaching it
+#    through solask turns "can run a sandboxed command" into "can run anything
+#    unsandboxed", so the override is refused here. Set it on a direct
+#    `node .../cdx-sol.mjs` call instead — that one is inside the sandbox and goes
+#    through the normal permission prompt.
+# 2. Write mode is documented as a direct `node .../cdx-sol.mjs --allow-write` call
+#    (cdx-sol/SKILL.md). Accepting the flag here let it inherit the exclusion with
+#    nothing but prose asking for user approval first.
+if [ -n "${CDX_SOL_COMPANION:-}" ]; then
+  printf 'solask: CDX_SOL_COMPANION is set. This shim runs outside the Claude Code sandbox and will not execute an overridden companion path. Call cdx-sol.mjs directly if you mean it.\n' >&2
+  exit 3
+fi
+for _a in "$@"; do
+  [ "$_a" = "--" ] && break
+  if [ "$_a" = "--allow-write" ]; then
+    printf 'solask: --allow-write is not accepted here (this shim is sandbox-excluded). Run write mode explicitly, after the user approves it:\n  node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --allow-write --cwd <repo> "<prompt>"\n' >&2
+    exit 3
+  fi
+done
+
+# Resolve node the way agyask resolves agy: PATH is not searched, because a `node`
+# planted earlier on PATH would execute unsandboxed here.
+NODE_BIN=""
+for _c in /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node "$HOME/.local/bin/node"; do
+  [ -x "$_c" ] && { NODE_BIN=$_c; break; }
+done
+[ -n "$NODE_BIN" ] || { printf 'solask: no node found in a trusted location (/opt/homebrew/bin, /usr/local/bin, /usr/bin, ~/.local/bin). PATH is deliberately not searched: this shim runs outside the sandbox.\n' >&2; exit 3; }
+
+exec "$NODE_BIN" "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" "$@"

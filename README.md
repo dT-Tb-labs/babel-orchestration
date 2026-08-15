@@ -134,9 +134,19 @@ payloads are untrusted input.
 
 **What still constrains them.** `agyask` pins `--mode plan --sandbox`, so agy
 cannot edit files or run commands even when a reviewed hunk contains text aimed
-at it. `solask` changes only where the wrapper runs; SOL's own read-only sandbox
-is untouched, and write mode stays behind explicit `--allow-write` approval.
-Both shims are ~30 lines and worth reading before you exempt them.
+at it. Both shims resolve the executable they run from a fixed list of absolute
+paths and never search `PATH`, so a planted `agy` or `node` cannot ride the
+exclusion. `solask` refuses `--allow-write` and `CDX_SOL_COMPANION` outright:
+write mode and companion overrides go through a direct `node .../cdx-sol.mjs`
+call, which stays inside the sandbox and prompts. Both shims are short and worth
+reading before you exempt them.
+
+**The one part you cannot close from here.** `excludedCommands` matches the
+command *name*. If anything earlier on your `PATH` is also called `agyask` or
+`solask`, that is what runs outside the sandbox — the hardening above lives
+inside these shims and never executes. Check what `command -v agyask solask`
+resolves to after installing, and keep `~/.local/bin` ahead of any directory a
+project or installer can write to.
 
 **If you would rather not.** Skip the exclusion and drop that channel — babel is
 designed to degrade (see the degradation table in `protocol.md` §10) and runs

@@ -123,4 +123,4 @@ All inter-AI communication (TaskPacket/finding-jsonl/DesignPacket, transport for
 
 ## Validation & provenance
 
-Measured provenance (what worked and the tuning rationale from pilots 1/2/3) is in `PILOTS.md` (dev log, out of runtime); it is not needed for execution. This skill's 3 files (+ optionally `references/advanced.md`) are self-contained.
+Measured provenance (what worked and the tuning rationale from pilots 1/2/3) is in `PILOTS.md` (dev log, out of runtime); it is not needed for execution. This skill's 4 files are self-contained. `references/advanced.md` is **not** optional: L acceptance (A6), the inter-round delta (A1), the stuck playbook (A2, every scale), checkpoint verification (A3) and channel adaptation (A9) all dispatch out of it, and install.sh checks for it.
