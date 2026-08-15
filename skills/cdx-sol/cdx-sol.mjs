@@ -147,16 +147,29 @@ function parseArgs(a) {
   return o;
 }
 
-function runCompanion(args, cwd) {
+// timeoutMs bounds the child itself. Without it WALL_CAP_MS is only as real as the
+// companion's own --timeout-ms: a companion that wedges (stale job file, lapsed
+// auth, EPERM on the state root) never returns, so the remaining-budget check
+// below it is never reached and the caller waits forever for a notification that
+// cannot arrive. A backgrounded call has no harness timeout to fall back on.
+function runCompanion(args, cwd, timeoutMs) {
   const r = spawnSync(process.execPath, [COMPANION, ...args], {
     cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+    ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" } : {}),
   });
-  if (r.error) throw r.error;
+  if (r.error) {
+    if (r.error.code === "ETIMEDOUT") {
+      return { code: -1, stdout: "", stderr: `companion did not return within ${timeoutMs}ms`, timedOut: true };
+    }
+    throw r.error;
+  }
   return { code: r.status ?? 0, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
 function launchBackground({ prompt, cwd, effort, write }) {
-  const { code, stdout, stderr } = runCompanion(buildLaunchArgs({ prompt, cwd, effort, write }), cwd);
+  // Launch only spawns the job and prints its id; a minute is generous. Bounded
+  // for the same reason the poll slices are: nothing above this call can stop it.
+  const { code, stdout, stderr } = runCompanion(buildLaunchArgs({ prompt, cwd, effort, write }), cwd, 60000);
   if (code !== 0) throw new Error(`Launch failed: ${stderr || stdout}`);
   let jobId;
   try { jobId = JSON.parse(stdout).jobId; } catch { throw new Error(`Bad launch JSON: ${stdout}`); }
@@ -172,8 +185,10 @@ function waitLoop(jobId, cwd, wallCapMs = WALL_CAP_MS) {
     const remaining = wallCapMs - (Date.now() - start);
     if (remaining <= SAFETY_MS) return "running"; // graceful: caller re-attaches
     const slice = Math.min(POLL_TIMEOUT_MS, remaining - SAFETY_MS);
+    // Hard bound one slice above what the companion was asked to wait, so a slice
+    // that stops returning costs one backoff, not the whole call.
     const { stdout, stderr } = runCompanion(
-      ["status", jobId, "--wait", "--timeout-ms", String(slice), "--json", "--cwd", cwd], cwd);
+      ["status", jobId, "--wait", "--timeout-ms", String(slice), "--json", "--cwd", cwd], cwd, slice + SAFETY_MS);
     let status = "unknown";
     try { status = JSON.parse(stdout).job?.status ?? "unknown"; } catch { /* launch race: job file not ready */ }
     if (status !== "running" && status !== "queued" && status !== "unknown") return status;
@@ -187,7 +202,10 @@ function waitLoop(jobId, cwd, wallCapMs = WALL_CAP_MS) {
 }
 
 function fetchResult(jobId, cwd) {
-  const { stdout } = runCompanion(["result", jobId, "--json", "--cwd", cwd], cwd);
+  // Bounded like the poll slices: a wedge here would hang after the job already
+  // finished, which looks identical to a slow model and has nothing above it to
+  // stop it. 60s is generous for reading a finished job's stored result.
+  const { stdout } = runCompanion(["result", jobId, "--json", "--cwd", cwd], cwd, 60000);
   const j = JSON.parse(stdout);
   const res = j.storedJob?.result ?? {};
   return { text: res.rawOutput || j.storedJob?.rendered || "", status: res.status ?? 0 };

@@ -46,8 +46,16 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
   mkdir -p "$DEST"
   for s in babel cdx-sol agy; do
     if [ -d "$SRC_DIR/$s" ]; then
-      rm -rf "$DEST/$s"
-      cp -R "$SRC_DIR/$s" "$DEST/$s"
+      # Copy beside the target, then swap. `rm -rf` first leaves a window where a
+      # live shim's exec target (agy_pty_wrapper.py, cdx-sol.mjs) is missing or
+      # half-written, and a babel round running during a re-install then reports
+      # that channel dead. The swap is two renames, not one, so it is not atomic
+      # either — but it is short and holds no partially-copied tree.
+      rm -rf "$DEST/.$s.new" "$DEST/.$s.old"
+      cp -R "$SRC_DIR/$s" "$DEST/.$s.new"
+      if [ -d "$DEST/$s" ]; then mv "$DEST/$s" "$DEST/.$s.old"; fi
+      mv "$DEST/.$s.new" "$DEST/$s"
+      rm -rf "$DEST/.$s.old"
       ok "copied $s"
     else
       note "source skill missing: $s (skipped)"

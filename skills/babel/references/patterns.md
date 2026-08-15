@@ -16,7 +16,7 @@ Used in Phase 1 (design). Run only when triage classifies the task as M/L. For S
 
 0. **Fix the canonical data channel** (data/replication tasks only, before design): decide the primary sources the deliverable must ground on and the "non-degrading way to read them," and record them in the TaskPacket `canon` field (protocol.md §2). Retrofitting this after design or acceptance leads the implementation worker to fill it via a degraded path (image OCR only, eyeballing a screenshot), creating gaps (a real-task defect root cause). Propagate `canon` into every subsequent implementation/repair TaskPacket. Non-data tasks skip this step.
 1. **Parallel launch**: once user Q&A via superpowers:brainstorming is done, and **before** the lead writes its own proposal, dispatch the identical DesignPacket request (TaskPacket, out_schema=DesignPacket; protocol.md §2) to SOL+agy simultaneously via `run_in_background`.
-2. **Anchoring-avoidance barrier**: the lead writes its own proposal (a DesignPacket) to completion without reading the external responses. Ordering is guaranteed by procedure, not code — place the actions that wait for or check the external output after the lead's proposal is complete.
+2. **Anchoring-avoidance barrier**: the lead writes its own proposal (a DesignPacket) to completion without reading the external responses. Ordering is guaranteed by procedure, not code — place the actions that wait for or check the external output after the lead's proposal is complete. **But "do not read it" is not achievable once a reply is in flight**: a completion notification carries the channel's stdout into the lead's context unbidden, mid-sentence, and an external DesignPacket that has been read cannot be unread. So make the barrier physical — redirect each launch into `.babel/<task>/results/design-<channel>.raw` (`agyask … > …` / `solask … > …`), exactly as Phase 3 lands acceptance results in files, so the notification carries nothing. If a launch template is used unredirected, dispatch the externals *after* the lead's own DesignPacket is written instead; the parallelism is worth less than the independence it would cost.
 3. **L only**: within Claude, generate independent per-viewpoint designs (MVP-first / risk-first / user-first) as a mixed Sonnet/Opus generation via the Workflow tool's `parallel()` (blueprint uses the same `agent()` API as the acceptance-gate template; schema is DesignPacket).
 4. **Integration**: consolidate all proposals (own + SOL + agy + Claude-internal viewpoints) into an agreement matrix plus points of difference.
 5. **Resolving differences**: the lead first fills cross-system differences with grounding (primary sources / actual code). Dynamic arbitration to the domain-strongest model (algorithmic→SOL / API spec→agy, sending only the differences) is in `advanced.md` §A4. If differences cannot be filled, the lead reconsiders at maximum depth (SKILL.md "think at maximum depth when stuck") → if that still fails, user gate "design differences."
@@ -36,14 +36,16 @@ solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-re
 
 agy cannot read the fs (protocol.md §1) → do not reference a path to spec.md; inline the spec essentials (goal/criteria/constraints) into the prompt. Use the heredoc env-var form below (avoids double-quote accidents). Keep the payload to the diff-hunk equivalent only, under the 32 KB cap (protocol.md §3).
 
-```bash
-PROMPT=$(cat <<'EOF'
+Write this to `.babel/<task>/inbox/agy-design.txt` with the Write tool (not a heredoc — protocol.md §3):
+
+```
 TaskPacket: {"goal":"independent design for <task summary>. Spec essentials: <summarize spec.md's goal/criteria/constraints inline here>","files":[],"inputs":[],"criteria":["<acceptance criteria>"],"constraints":["<constraints>"],"out_schema":"DesignPacket"}
 Output DesignPacket JSON only, no prose. Do not use any tools — answer directly from the text given above.
-EOF
-)
-[ "$(printf '%s' "$PROMPT" | wc -c)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
-AGY_PRINT_TIMEOUT=180s agyask "$PROMPT"
+```
+
+```bash
+[ "$(wc -c < .babel/<task>/inbox/agy-design.txt)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
+AGY_PRINT_TIMEOUT=180s agyask "$(cat .babel/<task>/inbox/agy-design.txt)"
 ```
 
 Bash `timeout: 200000` applies only if run in the foreground; backgrounded, the bound is `AGY_PRINT_TIMEOUT` enforced by the agyask watchdog (protocol.md §8).
@@ -71,7 +73,7 @@ The diagnosis-handoff playbook for when stuck in Phase 2 (two consecutive failed
 
 ## acceptance-gate
 
-Phase 3 by scale: **S = one adversarially-prompted Claude reviewer** — a single Agent covering all four dimensions, *not* the (a) Workflow (no Opus verify stage, no script); skip the rest. SOL quick is acceptable if already running, but Claude is default because small diffs raise SOL false positives. **M = one (a)(b)(c) round**, lead merge, and C/H fixes; no step-5 loop, convergence check, or completeness critic. After an M fix, re-run one change-impact reviewer whose scope intersects the fix and reported the finding; prefer SOL when several qualify. **The M re-review payload is not an A1 delta** — M's state has no cursors or snapshots (SKILL.md Phase 0 shapes). Rebuild the changeset diff for the fix's paths only (`git diff <baseline-commit> -- <paths>`, minus baseline hunks as above, **plus `git diff --no-index /dev/null <path>` for any fixed path that is untracked** — exactly as the main changeset build does, since a task-created file emits nothing from `git diff` against the baseline commit) and send that; it is slightly wider than a true delta and needs no multi-round machinery. That re-review fires **exactly once**: fix any new C/H it returns, then stop. M has no loop, so anything still open after that fix goes to the user as residual risk (user gate) rather than into another round — otherwise the re-review is an unbounded loop wearing M's clothes. **L = full section.** See SKILL.md Phase 0.
+Phase 3 by scale: **S = one adversarially-prompted Claude reviewer** — a single Agent covering all four dimensions, *not* the (a) Workflow (no Opus verify stage, no script); skip the rest. SOL quick is acceptable if already running, but Claude is default because small diffs raise SOL false positives. **M = one (a)(b)(c) round**, lead merge, and C/H fixes; no step-5 loop, convergence check, or completeness critic. After an M fix, re-run one change-impact reviewer whose scope intersects the fix and reported the finding; prefer SOL when several qualify. **The M re-review payload is not an A1 delta** — M's state has no cursors or snapshots (SKILL.md Phase 0 shapes). Rebuild the changeset diff for the fix's paths only (`git diff <baseline-commit> -- <paths>`, minus baseline hunks as above, **plus `git diff --no-index /dev/null "<path>"` for any fixed path that is untracked** — exactly as the main changeset build does, since a task-created file emits nothing from `git diff` against the baseline commit) and send that; it is slightly wider than a true delta and needs no multi-round machinery. That re-review fires **exactly once**: fix any new C/H it returns, then stop. M has no loop, so anything still open after that fix goes to the user as residual risk (user gate) rather than into another round — otherwise the re-review is an unbounded loop wearing M's clothes. **L = full section.** See SKILL.md Phase 0.
 
 **Review target = the actual changeset at the start of Phase 3**, not the file list estimated during Phase 0 triage — if an out-of-scope shared module was touched during implementation, include it too (agy review #8).
 
@@ -79,12 +81,34 @@ Phase 3 by scale: **S = one adversarially-prompted Claude reviewer** — a singl
 
 Subtract at hunk granularity, not path granularity. A path in `dirty` that the task never touched drops out whole; a path in `dirty` that the task *did* edit stays in, with the hunks already present in `baseline.diff` excluded — dropping the whole file instead would hide the task's own edits to it, which is the worse of the two errors. Exclusion means exact-match: a current hunk identical to a `baseline.diff` hunk drops out; a current hunk that overlaps a baseline hunk but no longer matches it (the task edited the same region the user had touched) **goes in whole, deliberately** — the two authors cannot be separated inside one hunk, and hiding the task's edit is the worse error, same rule as the untracked-edited case below. Note it in the acceptance report so findings against the user's lines are not read as findings against the task.
 
-Build it so nothing is silently dropped: `git diff <baseline-commit>` covers tracked edits **including staged ones**, and `git status --porcelain` names untracked files, which a plain diff omits entirely — a new file is exactly where a fresh defect hides. Write the unified diff to `.babel/<task>/inbox/changeset.diff` (untracked files appended via `git diff --no-index /dev/null <path>`) and the file list to `.babel/<task>/inbox/changeset-files.txt`. On a multi-round L run, also copy each changeset file verbatim to `.babel/<task>/snap-r<N>/<repo-relative-path>` at dispatch — the snapshots the inter-round delta is built from. How the per-channel delta is built, named, and sent (laggard channels, added/deleted paths, the diff-of-diffs trap) is defined once in `advanced.md` §A1; the state fields it reads are `protocol.md` §5. Reviewers that can read the fs (SOL / Claude subagents) receive diffs by path; agy receives the hunks inline. For spec-compliance review, distribute `.babel/<task>/spec.md` the same way (inline the essentials for agy).
+Build it so nothing is silently dropped: `git diff <baseline-commit>` covers tracked edits **including staged ones**, and `git ls-files -o --exclude-standard -z` names untracked files, which a plain diff omits entirely — a new file is exactly where a fresh defect hides. Write the unified diff to `.babel/<task>/inbox/changeset.diff`, appending each untracked file with `git diff --no-index /dev/null "$p"`. **Read that list NUL-delimited and quote every interpolated path** — without `-z`, git C-quotes names containing spaces, quotes, newlines or non-ASCII, so the shell receives escape sequences as literal bytes and quoting alone does not recover the real name; either way the file's hunks then never reach a reviewer while the round still counts as reviewed:
+
+```bash
+git ls-files -o --exclude-standard -z | while IFS= read -r -d '' p; do
+  git diff --no-index /dev/null "$p" >> .babel/<task>/inbox/changeset.diff
+done
+```
+ and the file list to `.babel/<task>/inbox/changeset-files.txt`. On a multi-round L run, also copy each changeset file verbatim to `.babel/<task>/snap-r<N>/<repo-relative-path>` at dispatch — the snapshots the inter-round delta is built from. How the per-channel delta is built, named, and sent (laggard channels, added/deleted paths, the diff-of-diffs trap) is defined once in `advanced.md` §A1; the state fields it reads are `protocol.md` §5. Reviewers that can read the fs (SOL / Claude subagents) receive diffs by path; agy receives the hunks inline.
+
+**Assert the payload before dispatching it.** Every "clean" verdict this gate can produce is a statement about the bytes that were actually sent, and nothing downstream re-derives them: a `NONE` from a channel handed a 0-byte diff is indistinguishable from a `NONE` from a channel handed the real changeset. So gate the build, and record what was sent:
+
+```bash
+D=.babel/<task>/inbox/changeset.diff
+[ -s "$D" ] || { echo 'changeset is empty — the round is void, not clean (§10 channel failure, not convergence)' >&2; exit 1; }
+# Changed text lines = args.diffLines: every +/- line, minus the ---/+++ file
+# headers. Do not filter on a second character — a legitimate `+++i` or `+-1`
+# in the source would be dropped, undercounting the diff and picking too small
+# a reviewer bracket.
+lines=$(( $(grep -c '^[+-]' "$D") - $(grep -cE '^(\+\+\+|---) ' "$D") ))
+[ "$lines" -gt 0 ] || { echo "void round: changeset has 0 reviewable text lines (binary-only?) — report as void, do not dispatch" >&2; exit 1; }
+```
+
+Three ways this comes back zero, all of which otherwise read as a clean round: the task genuinely changed nothing; the write failed or `.babel/` was wiped between build and dispatch; or the changeset is real but has no reviewable text (binary blobs, `Binary files … differ`). The first is "nothing to review" and the gate does not run at all. The other two are **void rounds** — report them as such, never as convergence. Write the byte count and the changed-line count into the dispatch record, and treat any channel's `NONE` against a payload of 0 bytes as a channel failure (protocol.md §4). For spec-compliance review, distribute `.babel/<task>/spec.md` the same way (inline the essentials for agy).
 
 ### Procedure
 
 1. Fix the changeset and dispatch the 3 systems.
-   - (a) Claude adversarial Workflow: generate/run the script below. Adversarial verification is L-only; M uses parallel Agents without Opus adjudication. **L round 1 exception**: (a) starts folded at one agent regardless of diff size (measured prior, `advanced.md` §A9) unless it is the only track. Otherwise scale reviewers by changed lines — the four dimensions are always all covered, what changes is how many agents share them:
+   - (a) Claude adversarial Workflow: generate/run the script below. Adversarial verification is L-only; M uses parallel Agents without Opus adjudication. **L fold prior**: (a) starts folded at one agent regardless of diff size (measured prior, `advanced.md` §A9) unless it is the only track, and **stays folded on every subsequent L round until it has earned a grounded `confirmed`** — the prior sets the starting width, the fold-reversal rule ends it, and neither is scoped to round 1 alone. Otherwise scale reviewers by changed lines — the four dimensions are always all covered, what changes is how many agents share them:
      - **under 50 lines → 1 agent** carrying all four dimensions in one prompt (pilot 1 showed 3 reviewers excessive for 44 lines);
      - **50-200 → 2 agents**: `correctness + edge-cases` / `security + spec-compliance`;
      - **over 200 → 3 agents**: `correctness` / `security` / `edge-cases + spec-compliance`.
@@ -103,11 +127,11 @@ Run correctness / security / edge-cases / spec-compliance through `pipeline()` i
 
 ### (b)(c) template
 
-(c) SOL: write the TaskPacket to `.babel/<task>/inbox/accept-r<N>.json` (argv avoidance, protocol.md §3) and point SOL at it. **Round 1 names `changeset.diff`; from round 2 on, name SOL's own delta** — `delta-r<N>.diff`, or its `-sol` variant if SOL lagged a round — since re-sending the whole changeset re-reviews what it already cleared. The exception is a channel with no `last_seen`, one that has never returned a clean result: it has no snapshot to diff from and gets the full changeset regardless of round (`advanced.md` §A1). Same for (b) agy below, and for the Claude template (`advanced.md` §A6). The packet must name the diff itself, not just the file list — a list of paths sends SOL to read current file contents, which after a later fix is no longer the changeset that was reviewed:
+(c) SOL: write the TaskPacket to `.babel/<task>/inbox/accept-r<N>.json` (argv avoidance, protocol.md §3) and point SOL at it. **Round 1 names `changeset.diff`; from round 2 on, name SOL's own delta** — `delta-r<N>.diff`, or its `-sol` variant if SOL lagged a round — since re-sending the whole changeset re-reviews what it already cleared. The exception is a channel with no `last_seen`, one that has never returned a clean result: it has no snapshot to diff from and gets the full changeset regardless of round (`advanced.md` §A1). Same for (b) agy below, and for the Claude template (`advanced.md` §A6). The packet must name the diff itself, and **no path list at all** — SOL runs backgrounded for up to ~9 minutes while the lead keeps fixing C/H from the in-session track, so any path it resolves is read from whatever the tree holds at that moment, not from what was dispatched. The finding then cites moved or already-closed lines, grounds as `refuted`, and A9 demotes the channel for a race the lead caused. Keep `inputs` empty; everything SOL needs is in the diff:
 ```json
 {"goal":"full review of changeset",
  "files":[{"path":".babel/<task>/inbox/changeset.diff"},{"path":".babel/<task>/spec.md"}],
- "inputs":[".babel/<task>/inbox/changeset-files.txt"],
+ "inputs":[],
  "criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
 ```
 ```bash
@@ -116,15 +140,20 @@ solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<
 `run_in_background: true` (bound = solask's ~9 min cap, not the Bash `timeout: 600000`; protocol.md §8). For critical acceptance of a security/irreversible L task, swap in `--tier deep` (see the cost discipline in SKILL.md).
 
 (b) agy: pass the changeset's diff hunks inline, and include the finding-jsonl format line plus one example line in the prompt (inline, like SOL). Check the payload against the 32 KB cap before dispatch; over it, split the hunks or degrade (protocol.md §3).
-```bash
-PROMPT=$(cat <<'EOF'
+
+**Build the prompt with the Write tool, never with a shell heredoc** (protocol.md §3). Write this to `.babel/<task>/inbox/agy-r<N>.txt`:
+
+```
 TaskPacket: {"goal":"full review of changeset","files":[{"path":"<diff hunk summary>"}],"inputs":[],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
-Diff hunk: <paste the changed diff hunks inline>
+Diff hunk: <the changed diff hunks>
 Output one JSON array per line: ["<id>","<sev C|H|M|L>","<file>",<line>,"<claim>","<evidence ~10-25 words>"]. Example: ["F1","C","auth.py",42,"token expiry unchecked","verify_token() decodes JWT without checking exp claim"]. Output NONE (single word) if clean. No prose. Do not use any tools — answer directly from the text given above.
-EOF
-)
-[ "$(printf '%s' "$PROMPT" | wc -c)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
-AGY_PRINT_TIMEOUT=240s agyask "$PROMPT"
+```
+
+then dispatch it:
+
+```bash
+[ "$(wc -c < .babel/<task>/inbox/agy-r<N>.txt)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
+AGY_PRINT_TIMEOUT=240s agyask "$(cat .babel/<task>/inbox/agy-r<N>.txt)"
 ```
 `run_in_background: true` with `AGY_PRINT_TIMEOUT=240s` — a whole-changeset review is heavier than a design request, so agy's budget is intentionally extended. That env var is the real bound; the Bash `timeout: 300000` only applies in the foreground (protocol.md §8).
 
@@ -141,5 +170,5 @@ AGY_PRINT_TIMEOUT=240s agyask "$PROMPT"
 ### Termination condition
 
 - **Convergence**: a round with zero new C/H is a *candidate* clean round, not convergence. Run the completeness critic (L-only, `advanced.md` §A5) after it and converge only if the critic is empty too. This holds for round 1 as well — a clean first round is the case where an uncovered dimension is most likely to be the reason nothing was found.
-- **Cap — two counters, two distinct triggers.** The hard ceiling is **`round` = 8**; no path extends past it. The user-approval trigger is **`budget.rounds_consumed` = 4**: before dispatching a round that would run with 4 already consumed, ask, with the added token estimate attached. **A round on which new C/H decreased consumes nothing** — trending toward convergence is not the failure mode either trigger exists for; a flat or divergent round consumes 1 (protocol.md §5 defines both counters; `round` also names result files and scoreboard entries, which is why it increments every dispatch regardless). So a task that converges steadily can run all 8 rounds without ever asking, and a task that thrashes asks after its 4th non-progressing round (pilot 2's hard spot: 7 rounds total, under the ceiling, approval obtained on the consumed-budget trigger). At the ceiling, the lead does one final reconsideration at maximum depth, then presents residual findings to the user (user gate "acceptance result" / "residual risk").
+- **Cap — two counters, two distinct triggers.** The hard ceiling is **`round` = 8**; no path extends past it. The user-approval trigger is **`budget.rounds_consumed` = 4**: before dispatching a round that would run with 4 already consumed, ask, with the added token estimate attached. **A round on which new C/H decreased consumes nothing** — trending toward convergence is not the failure mode either trigger exists for; a flat or divergent round consumes 1 (protocol.md §5 defines both counters; `round` also names result files and scoreboard entries, which is why it increments every dispatch regardless). **Plus a floor the lead cannot compute away: ask before dispatching round 5 (`round` = 5) regardless of `rounds_consumed`.** "New C/H decreased" is derived from the lead's own semantic dedup calls, and stopping to ask is a cost to the lead, so the consumption rule alone leaves the only brake on eight rounds of spend in the hands of the party that pays for pulling it — and a finding stream that merely trickles down (20, 19, 18…) consumes nothing forever. Under the floor, a steadily-converging task asks once at round 5 and continues; a thrashing one still asks earlier on the consumed-budget trigger. So a task that converges steadily reaches round 5 before asking, and a task that thrashes asks after its 4th non-progressing round (pilot 2's hard spot: 7 rounds total, under the ceiling, approval obtained on the consumed-budget trigger). At the ceiling, the lead does one final reconsideration at maximum depth, then presents residual findings to the user (user gate "acceptance result" / "residual risk").
 - **Crew stretch/shrink for L multi-round**: read the above convergence/extension decisions together with `channel_scoreboard` outcomes — channel dropping, routing weighting, and early folding are scoreboard-driven (`advanced.md` §A9; ephemeral, grounding-driven only, per protocol.md §7 invariant).

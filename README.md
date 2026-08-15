@@ -73,8 +73,11 @@ Then invoke from Claude Code:
 ## Prerequisites
 
 **babel** (lead):
-- Claude Code with the `superpowers` skill set (brainstorming, writing-plans,
-  executing-plans, subagent-driven-development) and the `Workflow` tool.
+- Claude Code. The `superpowers` skill set (brainstorming, writing-plans,
+  executing-plans, subagent-driven-development) and the `Workflow` tool are
+  recommended, not required — without superpowers the lead authors `spec.md` and
+  calls Agents directly, and without Workflow the dimension split runs as parallel
+  Agents (SKILL.md "Degradation without superpowers", patterns.md acceptance-gate).
 
 **cdx-sol** (optional channel):
 - Node.js
