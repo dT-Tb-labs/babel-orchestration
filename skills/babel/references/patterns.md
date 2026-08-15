@@ -107,6 +107,50 @@ lines=$(git apply --numstat "$D" | awk '{a+=$1+$2} END{print a+0}')
 [ "$lines" -gt 0 ] || { echo "void round: changeset has 0 reviewable text lines (binary-only?) — report as void, do not dispatch" >&2; exit 1; }
 ```
 
+**Then mint one receipt token per channel and stamp it into that channel's own copy
+of the payload** (protocol.md §2). One shared copy cannot carry per-channel tokens,
+and a shared token is one a channel can copy from a sibling's answer, so each channel
+gets its own file — the bytes above the token line are identical, so this costs a `cp`:
+
+```bash
+# $SRC is whatever this round dispatches to that channel — the changeset on round 1,
+# that channel's own delta from round 2 on (per-channel already, see (c) below).
+for ch in claude sol agy; do
+  SRC="$D"   # round ≥2: .babel/<task>/inbox/delta-r<N>[-$ch].diff
+  P=".babel/<task>/inbox/changeset-r<N>-$ch.diff"
+  # `|| exit` is load-bearing: on a failed copy the append below still succeeds and
+  # creates a file whose only line is the token, so the channel receives an empty
+  # payload it can produce a perfect receipt for — the void round the receipt exists
+  # to expose, reintroduced by the stamping step itself. Measured: without it, a
+  # missing $SRC yields a 1-line payload and a valid token.
+  cp "$SRC" "$P" || exit 1
+  tok="r<N>-$(openssl rand -hex 4)"
+  printf 'babel-receipt-token: %s\n' "$tok" >> "$P"     # last line, on purpose
+  [ "$(wc -l < "$P")" -gt 1 ] || exit 1                 # payload is more than the token
+  printf '%s %s %s\n' "$ch" "$tok" "$(shasum -a 256 "$P" | cut -c1-16)" \
+    >> "$TOKENS"                                       # the lead's copy, never sent
+done
+```
+
+`TOKENS` is a path **outside the repository** — `TOKENS="${TMPDIR:-/tmp}/babel-<task>-r<N>-tokens.txt"`. Not `.babel/`, and not anywhere else under the repo root: SOL is dispatched with `--cwd "<repo>"` and can read any file in it, so a token list stored in-repo is a cheaper way to satisfy the receipt than reading the payload — which is precisely the behaviour the receipt exists to detect. Keeping the answer key out of the answerer's reach is what makes the token evidence rather than decoration. It never enters a payload, a prompt, or a `--cwd` scope, and it is regenerated every round, so losing it costs one re-dispatch and nothing else.
+
+The token goes **at the end** because that is what makes echoing it evidence: a
+channel that answers from the first screen of the diff cannot produce it. It is never
+repeated in the prompt — the prompt says only where to find it (protocol.md §2), and a
+template that inlines it for convenience silently converts the receipt back into a
+formality. Keep `receipt-tokens.txt` out of every dispatched payload and out of any
+`--cwd` scope you hand a channel; a channel that can read the token file can pass the
+gate without reading anything else. The digest recorded alongside it is taken **after**
+the append, so it covers the exact bytes that channel receives, and it is what
+`advanced.md` §A6 takes as `args.digest` for the Claude track.
+
+Validate every response against this file before ingesting it (protocol.md §7 receipt
+ingestion gate): wrong token, absent token, empty `paths` → channel failure, re-request
+once, then degrade the track for the round. **A `NONE` with no valid receipt is not a
+clean result at any scale** — this is the gate that makes a lazy round and a clean
+round distinguishable, and it binds at S too, where there is no second reviewer and no
+critic to catch a channel that reviewed nothing.
+
 Binary paths contribute 0 to this count without making it 0, so a changeset of one
 text edit plus one changed binary passes the gate while the binary goes unreviewed —
 reviewers see only "Binary files ... differ". Enumerate every binary path in the
@@ -123,7 +167,7 @@ Three ways this comes back zero, all of which otherwise read as a clean round: t
      - **under 50 lines → 1 agent** carrying all four dimensions in one prompt (pilot 1 showed 3 reviewers excessive for 44 lines);
      - **50-200 → 2 agents**: `correctness + edge-cases` / `security + spec-compliance`;
      - **over 200 → 3 agents**: `correctness` / `security` / `edge-cases + spec-compliance`.
-     Do not hand-set the grouping in the template: pass the measured **changed-line count** (added+removed, not the diff file's `wc -l` — context lines inflate it 2-3×) as `args.diffLines` and A6 selects the bracket itself (it is not fixed at four agents).
+     Do not hand-set the grouping in the template: pass the measured **changed-line count** (added+removed, not the diff file's `wc -l` — context lines inflate it 2-3×) as `args.diffLines` and A6 selects the bracket itself (it is not fixed at four agents). Pass `round`, `digest` and `receiptToken` from the payload step too — the digest is what keeps a resumed run from replaying findings against a rebuilt payload, and the token is what the receipt gate checks (`advanced.md` §A6).
    - (b) agy: request review of the changeset's diff hunks inline.
    - (c) SOL normal: pass the changeset path via `.babel/<task>/inbox/` and request review.
    - (b)(c) dispatch simultaneously via `run_in_background`. (a) runs inside the lead's session.
@@ -138,15 +182,15 @@ Run correctness / security / edge-cases / spec-compliance through `pipeline()` i
 
 ### (b)(c) template
 
-(c) SOL: write the TaskPacket to `.babel/<task>/inbox/accept-r<N>.json` (argv avoidance, protocol.md §3) and point SOL at it. **Round 1 names `changeset.diff`; from round 2 on, name SOL's own delta** — `delta-r<N>.diff`, or its `-sol` variant if SOL lagged a round — since re-sending the whole changeset re-reviews what it already cleared. The exception is a channel with no `last_seen`, one that has never returned a clean result: it has no snapshot to diff from and gets the full changeset regardless of round (`advanced.md` §A1). Same for (b) agy below, and for the Claude template (`advanced.md` §A6). The packet must name the diff itself, and **no path list at all** — SOL runs backgrounded for up to ~9 minutes while the lead keeps fixing C/H from the in-session track, so any path it resolves is read from whatever the tree holds at that moment, not from what was dispatched. The finding then cites moved or already-closed lines, grounds as `refuted`, and A9 demotes the channel for a race the lead caused. Keep `inputs` empty; everything SOL needs is in the diff:
+(c) SOL: write the TaskPacket to `.babel/<task>/inbox/accept-r<N>.json` (argv avoidance, protocol.md §3) and point SOL at it. **Round 1 names the changeset; from round 2 on, SOL's own delta** — but always the token-stamped per-channel copy the payload step wrote (`changeset-r<N>-sol.diff`, built from `changeset.diff` on round 1 and from `delta-r<N>.diff` or its `-sol` variant after that) — since re-sending the whole changeset re-reviews what it already cleared. The exception is a channel with no `last_seen`, one that has never returned a clean result: it has no snapshot to diff from and gets the full changeset regardless of round (`advanced.md` §A1). Same for (b) agy below, and for the Claude template (`advanced.md` §A6). The packet must name the diff itself, and **no path list at all** — SOL runs backgrounded for up to ~9 minutes while the lead keeps fixing C/H from the in-session track, so any path it resolves is read from whatever the tree holds at that moment, not from what was dispatched. The finding then cites moved or already-closed lines, grounds as `refuted`, and A9 demotes the channel for a race the lead caused. Keep `inputs` empty; everything SOL needs is in the diff:
 ```json
 {"goal":"full review of changeset",
- "files":[{"path":".babel/<task>/inbox/changeset.diff"},{"path":".babel/<task>/spec.md"}],
+ "files":[{"path":".babel/<task>/inbox/changeset-r<N>-sol.diff"},{"path":".babel/<task>/spec.md"}],
  "inputs":[],
  "criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
 ```
 ```bash
-solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
+solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. First line of your answer is the receipt: {\"receipt\":{\"token\":\"<the value on the babel-receipt-token line at the END of the diff — read it there>\",\"paths\":[\"<files you actually read>\"],\"dimensions\":[\"correctness\",\"security\",\"edge-cases\",\"spec-compliance\"],\"unread\":[\"<dispatched paths you did not read>\"]}}. Then output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) after the receipt line if clean — the receipt is required either way. No prose."
 ```
 `run_in_background: true` (bound = solask's ~9 min cap, not the Bash `timeout: 600000`; protocol.md §8). For critical acceptance of a security/irreversible L task, swap in `--tier deep` (see the cost discipline in SKILL.md).
 
@@ -156,9 +200,14 @@ solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<
 
 ```
 TaskPacket: {"goal":"full review of changeset","files":[{"path":"<diff hunk summary>"}],"inputs":[],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
-Diff hunk: <the changed diff hunks>
-Output one JSON array per line: ["<id>","<sev C|H|M|L>","<file>",<line>,"<claim>","<evidence ~10-25 words>"]. Example: ["F1","C","auth.py",42,"token expiry unchecked","verify_token() decodes JWT without checking exp claim"]. Output NONE (single word) if clean. No prose. Do not use any tools — answer directly from the text given above.
+Diff hunk: <the changed diff hunks, with agy's babel-receipt-token line as the last line of this block>
+First line of your answer is the receipt: {"receipt":{"token":"<the value on the babel-receipt-token line at the END of the diff hunk block above>","paths":["<files the hunks came from that you reviewed>"],"dimensions":["correctness","security","edge-cases","spec-compliance"],"unread":["<hunks you did not review>"]}}
+Then output one JSON array per line: ["<id>","<sev C|H|M|L>","<file>",<line>,"<claim>","<evidence ~10-25 words>"]. Example: ["F1","C","auth.py",42,"token expiry unchecked","verify_token() decodes JWT without checking exp claim"]. Output NONE (single word) after the receipt line if clean — the receipt is required either way. No prose. Do not use any tools — answer directly from the text given above.
 ```
+
+agy's copy of the token goes at the end of the **inlined hunk block**, not in a file it
+cannot read (protocol.md §1). That proves the payload was read through, which is the
+strongest receipt an inline channel can give; do not read agy's `paths` as file access.
 
 then dispatch it:
 
@@ -170,12 +219,13 @@ AGY_PRINT_TIMEOUT=240s agyask "$(cat .babel/<task>/inbox/agy-r<N>.txt)"
 
 ### Merge procedure
 
-1. **Fingerprint dedup**: match on `{path, symbol (function name / spec section ID), violated invariant}`. Do not use line numbers in the dedup key (protocol.md §7). Matching is a semantic comparison by the lead.
+0. **Validate every receipt first** (protocol.md §7). A track whose receipt fails contributed no reviewed bytes: its lines are not merged, its entry is written with `receipt` set and `grounded:[]`, and its dimensions count as uncovered for the round's convergence test. Merging a response before checking its receipt is how an unread payload enters the round as findings.
+1. **Fingerprint dedup**: match on `{path, symbol (function name / spec section ID), violated invariant}`. Do not use line numbers in the dedup key (protocol.md §7). Matching is a semantic comparison by the lead. **Record each dedup class's size as `reporters`** on every member — it is what A9's duplicate split reads (§A9), and it is only knowable here, before the class collapses into one finding.
 2. Match against **both** the already-reported and already-rejected lists (prevents re-surfacing loops).
-3. Verify C/H only: batch 8–12 surviving findings per call. If a repro can run, verify with the reproduction command / failing test; if not, substitute an invariant argument (protocol.md §7, same section for repro safety rules).
+3. Verify C/H only: batch 8–12 surviving findings per call. **The (a) track's verifier-rejected C/H arrive here, not deleted** (`advanced.md` §A6 returns `rejected` in full): ground every rejected **C** unconditionally, read every rejected **H** against the code rather than inheriting the verdict, and list whatever you do not ground in the acceptance report as *verifier-rejected, ungrounded*. Reviewer and verifier share a model family; a rejection is one family's reading, and the round it silently cleans is the one nothing downstream can detect. If a repro can run, verify with the reproduction command / failing test; if not, substitute an invariant argument (protocol.md §7, same section for repro safety rules).
    **Ground SOL findings on small diffs**: under 50 lines, SOL acceptance has more false positives (pilot 1 reported nonexistent trailing whitespace). Before adopting an SOL-only finding, confirm actual file lines; multi-system agreement may raise priority. (S acceptance dispatches no SOL — SKILL.md Phase 0 — so this applies to SOL's checkpoint and M/L acceptance findings, not to any S review.)
 4. Fix verified findings only. **Re-ground before repair** against primary sources (`canon` / actual file line) and confirm the premise; never trust an audit finding as-is. This is a premise re-check against the file as it stands now — an earlier fix may have moved or already closed it — not a second grounding event: the finding keeps the one `confirmed`/`refuted` label step 3 gave it, and nothing is appended to `channel_scoreboard` here (protocol.md §7, "each is grounded once"). Pilot 2's R4 re-grounding prevented 2 false detections. Every repair TaskPacket must include constraint: `before fixing, re-ground against canon and confirm the finding's premise.`
-5. Re-run with **change-impact routing**: re-dispatch only the reviewers whose previous scope or unresolved findings intersect the fixed file/function (not unrelated reviewers). **For L multi-round, further narrow crew composition with `channel_scoreboard`** (protocol.md §5) — drop from the next round any channel with grounding confirmed=0 and refuted≥2 over the last 2 rounds (within-task online adaptation, `advanced.md` §A9). Each finding's grounding outcome (confirmed/refuted) is appended to the scoreboard at this merge stage (lead exclusively).
+5. Re-run with **change-impact routing**: re-dispatch only the reviewers whose previous scope or unresolved findings intersect the fixed file/function (not unrelated reviewers). Previous scope is the receipts' `paths`, not the dispatched scope — what a channel was sent and what it read are now separately recorded, and routing wants the second. **For L multi-round, further narrow crew composition with `channel_scoreboard`** (protocol.md §5) — drop from the next round any channel with confirmed=0 and refuted≥2 over the last 2 rounds, or any channel silent (`emitted:0`) on 2 rounds where another channel earned a grounded `confirmed` over the same scope (within-task online adaptation, `advanced.md` §A9). Each grounding **record** — outcome plus the check that produced it, `class`, and `reporters` — is appended to the scoreboard at this merge stage (lead exclusively), written as the check runs. A record with no `check` is not a grounding event and must not be written (protocol.md §5): that field is the only thing separating a lead that ran the repro from a lead that agreed.
 6. Output M/L in line form like C/H, but do not verify or fix them. Present them to the user in the final report.
 
 ### Termination condition

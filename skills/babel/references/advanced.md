@@ -185,14 +185,26 @@ export const meta = {
 // Without this, a correctly-formed call fails the guard below and the run dies
 // at 0 agents with a message that blames the caller for a harness detail.
 const A = typeof args === 'string' ? (() => { try { return JSON.parse(args) } catch { return null } })() : args
-if (!A || !A.diff || !A.spec || typeof A.diffLines !== 'number') {
-  throw new Error('babel-acceptance-review requires args {diff, spec, diffLines}')
+if (!A || !A.diff || !A.spec || typeof A.diffLines !== 'number' ||
+    typeof A.round !== 'number' || !A.digest || !A.receiptToken) {
+  throw new Error('babel-acceptance-review requires args {diff, spec, diffLines, round, digest, receiptToken}')
 }
 const CHANGESET = A.diff
 const SPEC = A.spec
 const MAX_FINDINGS = 20   // per dimension group; each one spawns an Opus verifier
+// `round` and `digest` (the lead's `shasum -a 256` of the dispatched diff) are in the
+// prompt on purpose: resume replays any agent() whose prompt is unchanged, and the
+// prompt otherwise names only a *path*. Rebuild the payload at that path — a later
+// round, a re-run, another task — and the cached findings come back attributed to
+// bytes no agent read. Digest in the prompt makes changed bytes a cache miss.
+// `receiptToken` is the exact opposite and MUST NOT be interpolated into any prompt:
+// it lives only at the end of the diff file, so echoing it is the one thing a reviewer
+// cannot do without having read the payload through (protocol.md §2). Putting it here
+// would turn the receipt back into a formality the model can satisfy from the prompt.
 const CONTEXT = `TaskPacket: {"goal":"acceptance review of the changeset","files":[{"path":"${CHANGESET}"},{"path":"${SPEC}"}],"inputs":["${CHANGESET}","${SPEC}"],"criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
-Read those two paths — they are your only inputs (protocol.md §2 access list). Report in protocol.md's finding-jsonl format: severity(C/H/M/L), file, line, claim, evidence(~10-25 words) required. Exclude speculation and style preferences. Report at most ${MAX_FINDINGS} findings, highest severity first, and set moreFindingsExist to true only if you actually had to drop findings to fit that limit.`
+Round ${A.round}. The payload at ${CHANGESET} has sha256 ${A.digest}; review that content, not a remembered version of it.
+Read those two paths — they are your only inputs (protocol.md §2 access list). Report in protocol.md's finding-jsonl format: severity(C/H/M/L), file, line, claim, evidence(~10-25 words) required. Exclude speculation and style preferences. Report at most ${MAX_FINDINGS} findings, highest severity first, and set moreFindingsExist to true only if you actually had to drop findings to fit that limit.
+Return a receipt (protocol.md §2): receipt.token is the value on the \`babel-receipt-token:\` line at the END of ${CHANGESET} — read it there and copy it exactly; receipt.paths lists the files you actually read; receipt.dimensions lists which of your assigned dimensions you actually covered; receipt.unread lists any dispatched path you did not read. A review that reports no findings still returns the receipt.`
 
 const FINDING_SCHEMA = {
   type: 'object',
@@ -201,6 +213,20 @@ const FINDING_SCHEMA = {
     // Inferring it from `length === MAX_FINDINGS` mislabels a dimension that
     // happened to find exactly that many and dropped nothing.
     moreFindingsExist: { type: 'boolean' },
+    // The receipt is required in the schema, so an agent that reviewed nothing
+    // cannot return the empty-findings shape that used to read as a clean
+    // dimension (protocol.md §2, §4). token is validated below against the value
+    // the lead wrote into the payload file.
+    receipt: {
+      type: 'object',
+      properties: {
+        token: { type: 'string' },
+        paths: { type: 'array', items: { type: 'string' } },
+        dimensions: { type: 'array', items: { type: 'string' } },
+        unread: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['token', 'paths', 'dimensions', 'unread'],
+    },
     findings: {
       type: 'array',
       maxItems: MAX_FINDINGS,
@@ -220,7 +246,24 @@ const FINDING_SCHEMA = {
   // moreFindingsExist is the only signal that the cap cost coverage, so it is
   // required: a truncated response with fewer than MAX_FINDINGS entries and no
   // flag was otherwise indistinguishable from complete coverage.
-  required: ['findings', 'moreFindingsExist'],
+  required: ['findings', 'moreFindingsExist', 'receipt'],
+}
+
+// The receipt ingestion gate (protocol.md §7), mechanised. Runs before anything in
+// the response is read as a review result — including an empty findings list.
+const receiptFailure = (res, keys) => {
+  const r = res && res.receipt
+  if (!r) return 'receipt missing'
+  if (r.token !== A.receiptToken) return 'receipt token does not match the dispatched payload'
+  if (!Array.isArray(r.paths) || !r.paths.length) return 'receipt.paths empty — nothing was read'
+  const outside = r.paths.filter(p => typeof p !== 'string' || p.startsWith('/') || p.split('/').includes('..'))
+  if (outside.length) return `receipt.paths outside the repo root: ${outside.join(', ')}`
+  const covered = new Set(Array.isArray(r.dimensions) ? r.dimensions : [])
+  const missing = keys.filter(k => !covered.has(k))
+  if (missing.length) return `assigned dimensions not covered: ${missing.join(', ')}`
+  const unknown = [...covered].filter(d => !Object.keys(LENS).includes(d))
+  if (unknown.length) return `receipt.dimensions outside the fixed four: ${unknown.join(', ')}`
+  return null
 }
 
 // One call verifies a batch, not one finding (§A8). `i` keys the verdict back to
@@ -268,11 +311,13 @@ const GROUPS = A.fold ? GROUPS_BY_SIZE.small
   : GROUPS_BY_SIZE.small
 const DIMENSIONS = GROUPS.map(keys => ({
   key: keys.join('+'),
+  keys,   // the individual lens keys, for the receipt's dimension-coverage check
   prompt: `${CONTEXT}\n\ndimensions: ${keys.map(k => `${k} (${LENS[k]})`).join('; ')}`,
 }))
 
 phase('Review')
 const capped = new Set()
+const receipts = []
 const results = await pipeline(
   DIMENSIONS,
   d => agent(d.prompt, { label: `review:${d.key}`, phase: 'Review', schema: FINDING_SCHEMA, model: 'sonnet', effort: 'low' }),
@@ -280,7 +325,19 @@ const results = await pipeline(
     // A dead reviewer is a channel failure, not a clean dimension. Returning []
     // here would let the round read as converged because nobody looked
     // (protocol.md §7 schema gate, §10 degradation).
-    if (!res) return [{ dimension: d.key, channelFailure: true }]
+    if (!res) return [{ dimension: d.key, channelFailure: true, reason: 'reviewer returned nothing' }]
+    // Receipt before findings, and before the empty-findings shortcut below: an
+    // agent that never opened the payload produces exactly that shape, and used to
+    // be indistinguishable from a dimension that swept it and found nothing
+    // (protocol.md §7 receipt ingestion gate). A failed receipt is a channel
+    // failure for the dimension, never a clean dimension.
+    const bad = receiptFailure(res, d.keys)
+    if (bad) {
+      log(`${d.key}: receipt rejected — ${bad}`)
+      return [{ dimension: d.key, channelFailure: true, reason: `receipt: ${bad}` }]
+    }
+    receipts.push({ dimension: d.key, paths: res.receipt.paths, unread: res.receipt.unread })
+    if (res.receipt.unread.length) log(`${d.key}: declared unread — ${res.receipt.unread.join(', ')}`)
     if (!res.findings.length) return []
     // A cap hit means findings were dropped, so that dimension is not fully
     // covered. log() alone leaves the lead unable to tell it from a clean sweep,
@@ -327,21 +384,38 @@ const results = await pipeline(
 )
 const isCH = f => f.severity === 'C' || f.severity === 'H'
 const out = results.filter(Boolean).flat().filter(Boolean)
-const failedDimensions = out.filter(f => f.channelFailure).map(f => f.dimension)
+const failedDimensions = out.filter(f => f.channelFailure).map(f => ({ dimension: f.dimension, reason: f.reason }))
 const all = out.filter(f => !f.channelFailure)
 const verified = all.filter(f => f.verdict)
-const confirmed = verified.filter(f => f.verdict.real)
+const upheld = verified.filter(f => f.verdict.real)
+// Rejections travel whole, not as a count. The verifier is the same model family as
+// the reviewer, so `real:false` is one family's reading, and deleting the finding
+// here is how a shared misconception becomes a clean round nothing downstream can
+// detect (protocol.md §7). The lead grounds every rejected C, reads every rejected
+// H, and reports whatever it did not ground as residual risk — all of which needs
+// the finding text and the verifier's reason, which a count destroys.
+const rejected = verified.filter(f => !f.verdict.real)
+  .map(f => ({ ...f, rejectedBecause: f.verdict.reason }))
+const rejectedCH = rejected.filter(isCH)
 const unresolved = all.filter(f => !f.verdict && isCH(f))    // verifier never ruled on these
 const unverified = all.filter(f => !f.verdict && !isCH(f))   // M/L, deliberately unverified
 const cappedDimensions = [...capped]
-log(`${confirmed.length}/${verified.length} C/H confirmed; ${unresolved.length} C/H unresolved; ${unverified.length} M/L unverified; ${failedDimensions.length} dimension(s) failed; ${cappedDimensions.length} capped`)
-return { confirmed, rejectedCount: verified.length - confirmed.length, unresolved, unverified, failedDimensions, cappedDimensions }
+log(`${upheld.length}/${verified.length} C/H upheld; ${rejectedCH.length} C/H rejected by the verifier and returned for lead grounding; ${unresolved.length} C/H unresolved; ${unverified.length} M/L unverified; ${failedDimensions.length} dimension(s) failed; ${cappedDimensions.length} capped`)
+return { upheld, rejected, unresolved, unverified, failedDimensions, cappedDimensions, receipts }
 ```
+The return names are deliberate: **`upheld`, never `confirmed`** — `confirmed` is a scoreboard label that only lead grounding writes (protocol.md §7), and a key called `confirmed` coming out of an LLM verifier is exactly the confusion that lets a verdict be copied into `channel_scoreboard`. `rejected` carries the full findings with `rejectedBecause`; the lead grounds every rejected C, reads every rejected H, and lists whatever it did not ground in the acceptance report as *verifier-rejected, ungrounded*. `receipts` is what the round actually opened — carry `paths`/`unread` into `reviewed_scope` (protocol.md §5) rather than assuming the dispatched scope was the reviewed scope.
+
 A non-empty `failedDimensions` means that dimension was never reviewed — the round is not a candidate clean round no matter how few findings came back, and the dimension is re-dispatched or declared dropped to the user. A non-empty `cappedDimensions` means that dimension returned as many findings as the cap allows and dropped the rest: it was truncated, not covered, so re-dispatch it on the narrowed scope before reading the round as converged. A non-empty `unresolved` is a §7 schema-gate failure, not a clean result: re-request that batch once, and if it comes back short again treat the track as degraded for the round (protocol.md §10) rather than reporting those C/H as if nobody found them. At merge time the lead normalizes the Workflow's schema output into finding-jsonl + global ID. Without the Workflow tool, substitute Agent-parallel review for the dimension-split review.
 
-**Launch**: `Workflow({scriptPath, args: {diff, spec, diffLines, fold?}})` — `diff` is the
+**Launch**: `Workflow({scriptPath, args: {diff, spec, diffLines, round, digest, receiptToken, fold?}})` — `diff` is the
 path chosen by the round rule in the script's header comment, `diffLines` its
-changed-line count per the header comment (never `wc -l` of the diff file). The
+changed-line count per the header comment (never `wc -l` of the diff file).
+`round` is the dispatch index; `digest` is `shasum -a 256 "$diff" | cut -c1-16` taken
+**after** the receipt token was appended, so it covers the exact bytes the reviewers
+get; `receiptToken` is the value on that appended line. Build all three in the same
+step that builds the payload (patterns.md acceptance-gate, "Assert the payload"), never
+by hand: a `digest` copied from the previous round is a resume cache hit on stale
+findings, which is the failure `digest` exists to prevent. The
 script cannot know the round — the lead passes `fold: true` per §A9's semantics:
 **on every L round until (a) has earned a grounded `confirmed`** (the measured
 prior; omit only when (a) is the only track), and after that point whenever the
@@ -351,12 +425,24 @@ edited between rounds; re-running a round is the same script with different
 `args`.
 
 **`resumeFromRunId` is for resuming *this* round, never for starting the next one.**
-Resume replays every completed `agent()` call whose prompt is unchanged — and the
-reviewer prompts are built from `CONTEXT` at module top, so round 2's `args.diff`
-never reaches them: the cached round-1 findings come back instantly, only the
-verify stage re-runs, and the round reports near-zero new C/H over a delta no
-agent ever read. Resume only after a pause, kill, or script edit **within the same
-round and the same `args`**; a new round is a new run.
+Resume replays every completed `agent()` call whose prompt is unchanged, and the
+harness matches **prompt text**, not inputs — so a prompt that names only a path is
+a promise about a filename, not about bytes. Rebuild the payload at that path (a
+later round, a re-run, a parallel task writing the same `.babel/` slug) and the
+cached findings return instantly, attributed to bytes no agent read, while the round
+reports near-zero new C/H.
+
+The fix is in the prompt, not in the discipline: `CONTEXT` carries `round` and the
+payload's `sha256`, so **changed bytes are a cache miss by construction** and a stale
+resume cannot silently succeed — it re-runs. Keep them there. The old rule still
+stands as the cheap first line of defence — resume only after a pause, kill, or
+script edit **within the same round and the same `args`**; a new round is a new run —
+but it is now a convention backed by a mechanism rather than the only thing standing
+between a paused run and fabricated coverage. Two things this does not cover, both
+deliberate: the digest is the lead's, so a lead that passes a stale digest gets a
+stale cache hit (build it in the payload step, never by hand), and the verifier
+prompts embed finding text rather than the digest, so they miss the cache whenever
+the reviewer stage does — which is the correct direction to fail.
 
 **Declare the verifier ceiling in the crew proposal**: worst case is
 `GROUPS.length × ceil(MAX_FINDINGS / BATCH)` Opus verifiers — 2 with one group, 6
@@ -402,15 +488,40 @@ Within one task, autonomously adjust channel composition with **no human gate**.
 
 **Firing condition**: **L and multi-round** (≥3 rounds expected) only. S/M finish before learning ramps up, so keep the fixed crew composition (the bandit becomes noise).
 
-**Sole signal — grounded outcomes**: use only `confirmed`/`refuted` from `state.json.channel_scoreboard` (protocol.md §5), grounded in code/primary sources. Never use subjective lead/LLM evaluation (`protocol.md` §7 invariant).
+**Sole signal — grounded outcomes**: use only the `grounded` records in `state.json.channel_scoreboard` (protocol.md §5), each carrying the check that produced it, and derive `confirmed`/`refuted` from them. Never use subjective lead/LLM evaluation (`protocol.md` §7 invariant), and never read a record with no `check` — a label with no evidence behind it is a lead's opinion wearing a grounding label, and this rule is the only consumer that would spend crew composition on it.
+
+**Reward = `Σ(1/reporters over confirmed records) / tokens`**, not `confirmed/token`. Every channel that reported a finding keeps the full `confirmed` label (protocol.md §7 — labels describe findings, not races), but a defect three channels all reported pays each of them 1/3, while one only that channel saw pays 1. Under the unsplit form the cheapest way to lead the reward was to report whatever is most likely to be reported by everyone, which selects for high-base-rate obvious findings and against exactly the independent coverage a multi-channel crew is bought for. The split is order-independent, so it reintroduces no latency race. `confirmed`/`refuted` **counts** still drive the drop rules below unchanged: a channel that only ever confirms duplicates is earning less reward, but it is not producing false positives, and dropping it is not what this measures.
 
 **Measured prior (round-1 composition)**: the in-Claude (a) track **starts folded** — one agent carrying all four dimensions, the small-bracket shape — regardless of diff size, and expands to its bracket width only after earning a grounded `confirmed`. This prior is a static default for **every L round 1**, not part of the online bandit — it applies even when the ≥3-round firing condition above never fires (an L task expected to converge in one round still starts (a) folded; there is simply no later round for the bandit to adjust). Rationale: on the one instrumented multi-round run, (a) was ~250× below the best channel on `confirmed/token`; full-width round 1 re-pays that measured loss every task just to let the bandit re-learn it. This is an N=1 prior, so it sets only the *starting* width — the fold-reversal rule below governs everything after round 1, and coverage is still guarded because a folded (a) covers all four dimensions in one prompt and the A5 critic checks for uncovered dimensions at every candidate clean round. (This paragraph is not the online loop writing itself into the conventions — it entered via the offline path, cross-task analysis plus the human gate, exactly the route the last paragraph of this section requires.) Degraded modes are exempt: when (a) is the only track (both externals dead, or single-channel minimal mode), it runs at full bracket width from round 1 — there the prior's comparison channel does not exist.
 
-**Adjustment rule (multi-armed bandit, reward = confirmed/token)**: after each round's merge, read the scoreboard to decide the next round's crew composition. Every field this rule needs — per-round `confirmed`/`refuted`, `tokens`, `classes` — is in the `channel_scoreboard` entry the lead appends at merge (protocol.md §5). Early = exploration (fire all channels), late = exploitation.
+**Adjustment rule (multi-armed bandit, reward as defined above)**: after each round's merge, read the scoreboard to decide the next round's crew composition. Every field this rule needs — the per-round `grounded` records with their `outcome`/`class`/`reporters`, plus `emitted`, `receipt` and `tokens` — is in the `channel_scoreboard` entry the lead appends at merge (protocol.md §5). Early = exploration (fire all channels), late = exploitation.
 - **Drop**: sum the last 2 round entries for a channel; `confirmed=0` and `refuted≥2` → remove it from the next round. Do not pay tokens for only false positives. Applies within the current task only; all channels revive next task. **Two entries are required, not "the last up to 2"**: on one observation the sum trivially satisfies both conditions, so a channel that opens with two refuted findings — pilot 3's agy round, exactly — is removed for the whole task on a sample of one, and drop has no revival path inside the task. A channel with a single entry is never dropped; fold it if it is expensive, and let round 2 supply the second observation.
+- **Drop on silence (positive-evidence requirement)**: the rule above is entirely
+  negative — it fires on `refuted≥2`, which a channel must *say something* to earn.
+  A channel that answers `NONE` every round accumulates neither `confirmed` nor
+  `refuted`, so it is never dropped, and returning nothing becomes the cheapest way
+  to buy the appearance of review for the whole task. So count **missed rounds**:
+  a round in which that channel's entry has `emitted:0` (protocol.md §5) **and** the
+  round produced at least one grounded `confirmed`, from any channel, over scope
+  that channel was also dispatched. **Two missed rounds → drop it for the task**,
+  reported as "produced no positive evidence on rounds where defects were found",
+  which is a different sentence to the user than the false-positive drop and should
+  stay different.
+  The co-occurrence condition is the whole design: a channel is silent on a genuinely
+  clean changeset too, and a bare `emitted:0` counter would drop the entire crew on
+  the first round nobody found anything — punishing the correct answer. Silence only
+  becomes evidence when the same bytes demonstrably contained a real defect. Two
+  such rounds, not one, for the same reason the drop rule needs two entries: on one
+  observation "missed the round everyone else scored on" is an ordinary bad round.
+  What this cannot catch, stated rather than papered over: a channel that emits one
+  cheap plausible finding per round is silent in substance but not by this measure —
+  the fold-on-reward rule below is what reaches that behaviour, since a stream of
+  ungrounded or duplicate findings earns almost no split reward per token. And a
+  channel whose receipt keeps failing never reaches either rule; it is degraded per
+  round by the receipt gate itself (protocol.md §7, §10), which is the faster path.
 - **Fold on reward before dropping on failure**: the drop rule above needs
   `confirmed=0`, which a channel earning one finding per round never hits no matter
-  what it costs. So also compare `confirmed/token` across channels each round and
+  what it costs. So also compare the split reward across channels each round and
   fold any channel an order of magnitude below the best to its cheapest useful form.
   The fold form is per channel: an **in-Claude track** drops to one dimension group,
   or to the completeness-critic slot; **SOL** drops one tier (deep→normal→quick) and
@@ -421,7 +532,7 @@ Within one task, autonomously adjust channel composition with **no human gate**.
   removes a channel — that is the drop rule's job, and it is reported either way.
   Folding is reversible within the task: a folded channel that still earns
   `confirmed` comes back to full width. **Only a full-width channel sets the
-  baseline the comparison is made against.** `confirmed/token` has no coverage
+  baseline the comparison is made against.** The reward has no coverage
   term, so a narrowed channel's ratio rises purely by reviewing less: let a
   folded channel define "the best" and it folds the wide channel next round,
   which raises *its* ratio in turn, and two or three rounds of that ratchet
@@ -437,7 +548,7 @@ Within one task, autonomously adjust channel composition with **no human gate**.
   `channel_scoreboard`: it is a restoration signal, not a grounding label (§7). Measured on this skill's own hardening run,
   the gap between the best and worst channel was ~250× reward, with no round in
   which the drop rule fired.
-- **Exploitation (routing bias)**: read `classes` across rounds; if confirmed findings of one defect class concentrate in a channel, make it the priority re-run target of change-impact routing (protocol.md §9). Ties break toward the channel with the higher `confirmed/tokens` ratio, then toward the cheaper channel.
+- **Exploitation (routing bias)**: read `grounded[].class` on confirmed records across rounds; if confirmed findings of one defect class concentrate in a channel, make it the priority re-run target of change-impact routing (protocol.md §9). Ties break toward the channel with the higher split reward, then toward the cheaper channel.
 - **Stretch/shrink**: read with the convergence trend (patterns.md termination condition) — if new C/H keeps declining and all channels skew `refuted`, treat as early convergence and fold the crew composition. While high `confirmed` continues, extend. Whether the round consumes budget is not this rule's call: `budget.rounds_consumed` has exactly one condition, "new C/H did not decrease" (protocol.md §5), and a high-`confirmed` round that still decreased new C/H leaves it untouched by that condition, not by this one. The 8-round hard ceiling on `round` still binds regardless — no scoreboard trend extends past it.
 
 **Grounding-cost discipline**: as defined in protocol.md §7 — the one consequence that matters here is that ungrounded findings stay out of the scoreboard entirely, so the bandit only ever reads reality-checked labels.
