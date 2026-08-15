@@ -51,11 +51,13 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
       # half-written, and a babel round running during a re-install then reports
       # that channel dead. The swap is two renames, not one, so it is not atomic
       # either — but it is short and holds no partially-copied tree.
-      rm -rf "$DEST/.$s.new" "$DEST/.$s.old"
-      cp -R "$SRC_DIR/$s" "$DEST/.$s.new"
-      if [ -d "$DEST/$s" ]; then mv "$DEST/$s" "$DEST/.$s.old"; fi
-      mv "$DEST/.$s.new" "$DEST/$s"
-      rm -rf "$DEST/.$s.old"
+      # $$ in the staging names: two installers running at once would otherwise
+      # share .new/.old and delete each other's half-installed tree.
+      rm -rf "$DEST/.$s.new.$$" "$DEST/.$s.old.$$"
+      cp -R "$SRC_DIR/$s" "$DEST/.$s.new.$$"
+      if [ -d "$DEST/$s" ]; then mv "$DEST/$s" "$DEST/.$s.old.$$"; fi
+      mv "$DEST/.$s.new.$$" "$DEST/$s"
+      rm -rf "$DEST/.$s.old.$$"
       ok "copied $s"
     else
       note "source skill missing: $s (skipped)"
@@ -64,8 +66,12 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
   for shim in agy/agyask cdx-sol/solask; do
     if [ -f "$SRC_DIR/$shim" ]; then
       mkdir -p "$BIN"
-      cp "$SRC_DIR/$shim" "$BIN/${shim#*/}"
-      chmod +x "$BIN/${shim#*/}"
+      # cp truncates the destination in place: a shim executing at that moment
+      # reads a half-written script. Write beside it and rename — rename is atomic
+      # on the same filesystem, so a concurrent exec sees either version whole.
+      cp "$SRC_DIR/$shim" "$BIN/.${shim#*/}.$$"
+      chmod +x "$BIN/.${shim#*/}.$$"
+      mv "$BIN/.${shim#*/}.$$" "$BIN/${shim#*/}"
       ok "installed ${shim#*/} -> $BIN"
     fi
   done
@@ -90,7 +96,7 @@ note "babel needs the superpowers skill set + Workflow tool inside Claude Code (
 if command -v node >/dev/null 2>&1; then
   if [ -f "$DEST/cdx-sol/cdx-sol.mjs" ] && node "$DEST/cdx-sol/cdx-sol.mjs" --selftest >/dev/null 2>&1; then
     ok "cdx-sol channel ready (node + companion; --selftest never calls SOL, so auth stays unverified — run 'codex login' if the first real call returns empty)"
-    if command -v solask >/dev/null 2>&1; then
+    if [ "$(command -v solask 2>/dev/null)" = "$BIN/solask" ]; then
       note "cdx-sol runs outside the Claude Code sandbox: add \"solask\" AND \"solask *\" to sandbox.excludedCommands in ~/.claude/settings.json (its own sandbox-exec cannot nest inside Claude's). An excluded command runs unsandboxed — read the shim and README 'What the sandbox exclusion costs you' first, or skip it and let the channel degrade off. Then call SOL as: solask --tier normal --cwd <repo> \"<prompt>\""
     else
       note "solask not on PATH — babel calls SOL through it. Add $BIN to PATH (until then every SOL call needs a per-call sandbox bypass)."
@@ -110,18 +116,27 @@ if [ -n "$PYTHON" ]; then
   # Prefer a dedicated venv: PEP 668 blocks `pip install` into a system Python, and
   # the venv lives outside $DEST because installing wipes and recopies that tree.
   # agyask resolves the same path, falling back to plain python3.
-  if [ ! -x "$AGY_VENV/bin/python3" ]; then
+  # Windows venvs put executables in Scripts/ with .exe names; the POSIX-only
+  # bin/python3 paths made every Windows install fall back to the system Python
+  # while reporting the venv step as done.
+  case "$OS" in
+    windows) VENV_PY="$AGY_VENV/Scripts/python.exe"; VENV_PIP="$AGY_VENV/Scripts/pip.exe" ;;
+    *)       VENV_PY="$AGY_VENV/bin/python3";        VENV_PIP="$AGY_VENV/bin/pip" ;;
+  esac
+  if [ ! -x "$VENV_PY" ]; then
     "$PYTHON" -m venv "$AGY_VENV" >/dev/null 2>&1 \
-      && "$AGY_VENV/bin/pip" -q install "$PTY_PKG" >/dev/null 2>&1 || true
+      && "$VENV_PIP" -q install "$PTY_PKG" >/dev/null 2>&1 || true
   fi
-  [ -x "$AGY_VENV/bin/python3" ] && PYTHON="$AGY_VENV/bin/python3"
+  [ -x "$VENV_PY" ] && PYTHON="$VENV_PY"
   if "$PYTHON" - <<PYEOF >/dev/null 2>&1
 import importlib, sys
 importlib.import_module("winpty" if sys.platform.startswith("win") else "ptyprocess")
 PYEOF
   then
     if agy_present; then
-      if command -v agyask >/dev/null 2>&1; then
+      # Compare against the copy just installed: a bare `command -v` happily
+      # reports a stale agyask from some other PATH entry as "ready".
+      if [ "$(command -v agyask 2>/dev/null)" = "$BIN/agyask" ]; then
         ok "agy channel ready ($PYTHON + $PTY_PKG + agy binary + agyask)"
       else
         note "agyask not on PATH — babel calls agy through it. Add $BIN to PATH (channel degrades off until then)."
@@ -131,7 +146,7 @@ PYEOF
       note "agy binary not found (PATH or known locations) — install agy and sign in by running it interactively once, or pass --agy-path. Channel will degrade off."
     fi
   else
-    note "$PTY_PKG unavailable — venv setup at $AGY_VENV failed; run: $PYTHON -m venv \"$AGY_VENV\" && \"$AGY_VENV/bin/pip\" install $PTY_PKG (only the PTY fallback degrades; the direct agy path still works)"
+    note "$PTY_PKG unavailable — venv setup at $AGY_VENV failed; run: $PYTHON -m venv \"$AGY_VENV\" && \"$VENV_PIP\" install $PTY_PKG (only the PTY fallback degrades; the direct agy path still works)"
   fi
 else
   note "python not found — agy channel unavailable (babel degrades to fewer channels)"

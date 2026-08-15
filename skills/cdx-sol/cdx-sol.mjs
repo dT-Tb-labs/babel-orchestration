@@ -54,14 +54,21 @@ function buildLaunchArgs({ prompt, cwd, effort, write }) {
   return args;
 }
 
+let offloadSeq = 0;
+
 function guardOutput(text, cwd, offloadChars = OFFLOAD_CHARS) {
   const body = String(text ?? "");
   if (body.length <= offloadChars) return { rendered: body, offloaded: null };
   try {
     const dir = path.join(cwd, ".sol");
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, ".gitignore"), "*\n", "utf8"); // never commit offloaded model output
-    const file = path.join(dir, `sol-output-${Date.now()}.md`);
+    // Write the ignore rule once. Rewriting it every call silently discarded any
+    // edit the user had made to that file.
+    const ignore = path.join(dir, ".gitignore");
+    if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, "*\n", "utf8"); // never commit offloaded model output
+    // pid + counter, not just a millisecond stamp: two calls landing in the same
+    // millisecond would name the same file and one answer would overwrite the other.
+    const file = path.join(dir, `sol-output-${Date.now()}-${process.pid}-${offloadSeq++}.md`);
     fs.writeFileSync(file, body, "utf8");
     const head = body.slice(0, 2000);
     return {
@@ -160,22 +167,35 @@ function runCompanion(args, cwd, timeoutMs = 60000) {
     cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
     timeout: timeoutMs, killSignal: "SIGKILL",
   });
+  // Keep whatever the child managed to write. On a launch timeout the jobId may
+  // already be on stdout, and discarding it orphans a live codex job that nothing
+  // can re-attach to or kill.
+  const stdout = r.stdout ?? "";
+  const stderr = r.stderr ?? "";
   if (r.error) {
     if (r.error.code === "ETIMEDOUT") {
-      return { code: -1, stdout: "", stderr: `companion did not return within ${timeoutMs}ms`, timedOut: true };
+      return { code: -1, stdout, stderr: `${stderr}\ncompanion did not return within ${timeoutMs}ms`, timedOut: true };
     }
-    throw r.error;
+    // maxBuffer overflow and friends: report, but do not silently drop what came back.
+    return { code: -1, stdout, stderr: `${stderr}\ncompanion failed: ${r.error.message}`, failed: true };
   }
-  return { code: r.status ?? 0, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  // status is null when the child died on a signal; `?? 0` called that success.
+  const code = r.status ?? (r.signal ? -1 : 0);
+  return { code, stdout, stderr, signal: r.signal ?? null };
 }
 
 function launchBackground({ prompt, cwd, effort, write }) {
   // Launch only spawns the job and prints its id; a minute is generous. Bounded
   // for the same reason the poll slices are: nothing above this call can stop it.
-  const { code, stdout, stderr } = runCompanion(buildLaunchArgs({ prompt, cwd, effort, write }), cwd, 60000);
-  if (code !== 0) throw new Error(`Launch failed: ${stderr || stdout}`);
+  const { code, stdout, stderr, timedOut } = runCompanion(buildLaunchArgs({ prompt, cwd, effort, write }), cwd, 60000);
   let jobId;
-  try { jobId = JSON.parse(stdout).jobId; } catch { throw new Error(`Bad launch JSON: ${stdout}`); }
+  try { jobId = JSON.parse(stdout).jobId } catch { jobId = null }
+  // A launch that timed out may still have spawned the job and printed its id
+  // before we killed the companion. Surface that id: without it the job runs on
+  // with nobody able to attach to it or kill it.
+  if (timedOut && jobId) throw new Error(`Launch timed out but the job started — re-attach or kill it: ${jobId}`);
+  if (code !== 0) throw new Error(`Launch failed: ${stderr || stdout}`);
+  if (!jobId) throw new Error(`Bad launch JSON: ${stdout}`);
   if (!jobId) throw new Error(`No jobId in launch output: ${stdout}`);
   return jobId;
 }
@@ -190,10 +210,16 @@ function waitLoop(jobId, cwd, wallCapMs = WALL_CAP_MS) {
     const slice = Math.min(POLL_TIMEOUT_MS, remaining - SAFETY_MS);
     // Hard bound one slice above what the companion was asked to wait, so a slice
     // that stops returning costs one backoff, not the whole call.
-    const { stdout, stderr } = runCompanion(
+    const { code, stdout, stderr } = runCompanion(
       ["status", jobId, "--wait", "--timeout-ms", String(slice), "--json", "--cwd", cwd], cwd, slice + SAFETY_MS);
     let status = "unknown";
-    try { status = JSON.parse(stdout).job?.status ?? "unknown"; } catch { /* launch race: job file not ready */ }
+    // Only a companion that exited cleanly is allowed to state the job's status.
+    // A failed or signal-killed one can still print parseable stale JSON, and
+    // accepting it would let "completed" arrive from a process that completed
+    // nothing.
+    if (code === 0) {
+      try { status = JSON.parse(stdout).job?.status ?? "unknown"; } catch { /* launch race: job file not ready */ }
+    }
     if (status !== "running" && status !== "queued" && status !== "unknown") return status;
     if (status === "unknown") {
       if (++unknownStreak >= 5) throw new Error(`Job ${jobId} status unresolved after retries. Last stderr: ${stderr || "(none)"}`);
@@ -208,11 +234,19 @@ function fetchResult(jobId, cwd) {
   // Bounded like the poll slices: a wedge here would hang after the job already
   // finished, which looks identical to a slow model and has nothing above it to
   // stop it. 60s is generous for reading a finished job's stored result.
-  const { stdout } = runCompanion(["result", jobId, "--json", "--cwd", cwd], cwd, 60000);
+  const { code, stdout, stderr } = runCompanion(["result", jobId, "--json", "--cwd", cwd], cwd, 60000);
+  if (code !== 0) throw new Error(`Result fetch failed (exit ${code}) for ${jobId}: ${stderr || stdout}`);
   const j = JSON.parse(stdout);
-  const res = j.storedJob?.result ?? {};
-  return { text: res.rawOutput || j.storedJob?.rendered || "", status: res.status ?? 0 };
+  // A stored job with no result is not an empty answer — it is a missing one.
+  // `?? {}` plus `status ?? 0` used to render that as "" with exit 0, which is a
+  // clean-looking pass for a job nobody can show output from.
+  const res = j.storedJob?.result;
+  const text = res?.rawOutput || j.storedJob?.rendered || "";
+  if (!res && !text) throw new Error(`Job ${jobId} has no stored result to read`);
+  return { text, status: res?.status ?? 0 };
 }
+
+const START_MS = Date.now();
 
 function main() {
   const o = parseArgs(process.argv.slice(2));
@@ -230,11 +264,17 @@ function main() {
     jobId = launchBackground({ prompt: o.prompt, cwd: o.cwd, effort: tierToEffort(o.tier), write: o.write });
   }
 
-  const status = waitLoop(jobId, o.cwd);
+  // The advertised bound is the whole process, not the poll loop: a 60s launch
+  // plus a 540s poll plus a 60s result fetch is 660s, past the 600s a foreground
+  // caller allows. Spend what the launch already used, and keep a fetch reserve.
+  const pollCap = WALL_CAP_MS - (Date.now() - START_MS) - 60000;
+  const status = waitLoop(jobId, o.cwd, Math.max(pollCap, 10000));
   if (status === "running") {
     console.log(`SOL_STILL_RUNNING ${jobId}`);
     console.log(`Still working after ${Math.round(WALL_CAP_MS / 60000)}min. Re-attach: node cdx-sol.mjs --attach ${jobId} --cwd "${o.cwd}"`);
-    process.exit(0);
+    // Exit 3, not 0: the job did not finish, and a caller that only looks at the
+    // exit status would otherwise record an unfinished review as a completed one.
+    process.exit(3);
   }
 
   const { text, status: exitStatus } = fetchResult(jobId, o.cwd);
