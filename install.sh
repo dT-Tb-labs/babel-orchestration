@@ -50,10 +50,20 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
   # which was its own check-then-act race.
   LOCK="$DEST/.babel-install.lock"
   if ! mkdir "$LOCK" 2>/dev/null; then
-    printf '  [FAIL] another install is running (%s exists). Wait for it, or remove that directory if it is stale.\n' "$LOCK"
-    exit 1
+    # A lock left behind by a SIGKILLed installer would otherwise block every
+    # future install forever, with no way to tell it from a live one. The pid
+    # file makes that decision mechanical.
+    _owner=$(cat "$LOCK/pid" 2>/dev/null || echo "")
+    if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
+      printf '  [FAIL] another install is running (pid %s). Wait for it to finish.\n' "$_owner"
+      exit 1
+    fi
+    printf '  [warn] stale install lock from pid %s — taking it over.\n' "${_owner:-unknown}"
+    rm -rf "$LOCK"
+    mkdir "$LOCK" || { printf '  [FAIL] could not take the install lock at %s\n' "$LOCK"; exit 1; }
   fi
-  trap 'rmdir "$LOCK" 2>/dev/null || :' EXIT INT TERM
+  printf '%s\n' "$$" > "$LOCK/pid"
+  trap 'rm -rf "$LOCK" 2>/dev/null || :' EXIT INT TERM
 
   # Per-file atomic replace, never a directory swap. A directory swap always has
   # a window where the target does not exist, and a live shim exec'ing its
@@ -140,8 +150,13 @@ if [ -n "$PYTHON" ]; then
     *)       VENV_PY="$AGY_VENV/bin/python3";        VENV_PIP="$AGY_VENV/bin/pip" ;;
   esac
   if [ ! -x "$VENV_PY" ]; then
-    "$PYTHON" -m venv "$AGY_VENV" >/dev/null 2>&1 \
-      && "$VENV_PIP" -q install "$PTY_PKG" >/dev/null 2>&1 || true
+    "$PYTHON" -m venv "$AGY_VENV" >/dev/null 2>&1 || true
+  fi
+  # Install the package whenever it is missing, not only when the venv is new: an
+  # interrupted first run left a venv whose python existed but whose package never
+  # landed, and the old "only if python is absent" guard skipped it forever after.
+  if [ -x "$VENV_PY" ] && ! "$VENV_PY" -c "import importlib,sys;importlib.import_module('winpty' if sys.platform.startswith('win') else 'ptyprocess')" >/dev/null 2>&1; then
+    "$VENV_PIP" -q install "$PTY_PKG" >/dev/null 2>&1 || true
   fi
   [ -x "$VENV_PY" ] && PYTHON="$VENV_PY"
   if "$PYTHON" - <<PYEOF >/dev/null 2>&1

@@ -64,14 +64,30 @@ prompt=$*
 # An empty payload must not become a call. Without this the whole prompt is the
 # appended no-tools sentence, agy acknowledges it, and the caller gets a
 # non-empty exit-0 answer about nothing reviewed (protocol.md §4, void round).
-if [ -z "$(printf '%s' "$prompt" | tr -d '[:space:]')" ]; then
-  printf 'agyask: refusing an empty prompt — nothing would be reviewed and the reply would still look clean.\n' >&2
+# A byte floor as well as an emptiness check: `tr -d '[:space:]'` is ASCII-only,
+# so a payload of nothing but U+00A0 or U+3000 would pass an emptiness test while
+# containing no review payload at all. No real prompt is under 20 bytes.
+if [ "$(printf '%s' "$prompt" | tr -d '[:space:]' | wc -c | tr -d ' ')" -lt 20 ]; then
+  printf 'agyask: refusing a prompt with almost no content — nothing would be reviewed and the reply would still look clean.\n' >&2
   exit 3
 fi
 if [ "${AGY_TOOLS:-0}" != "1" ]; then
   prompt="$prompt
 
 Do not use any tools — answer directly from the text given above."
+fi
+
+# Resolve agy to a path we choose, not to whatever PATH happens to name. agyask
+# runs OUTSIDE the Claude Code sandbox (sandbox.excludedCommands), so an `agy`
+# planted earlier on PATH would execute unsandboxed with the user's full access.
+# Same resolution order as agy_pty_wrapper.py.
+AGY_BIN=""
+for _c in "${AGY_PATH:-}" "$HOME/.local/bin/agy" "$HOME/.antigravity/bin/agy" /usr/local/bin/agy /opt/homebrew/bin/agy; do
+  [ -n "$_c" ] && [ -x "$_c" ] && { AGY_BIN=$_c; break; }
+done
+if [ -z "$AGY_BIN" ]; then
+  printf 'agyask: agy not found in a known location. Install it, or set AGY_PATH to its absolute path (PATH is deliberately not searched: this shim runs outside the sandbox).\n' >&2
+  exit 3
 fi
 
 started=$(date +%s)
@@ -96,6 +112,15 @@ kill_tree() {
   # parameters ARE per-invocation, which is what makes this recursion safe.
   for _k in $(pgrep -P "$1" 2>/dev/null || :); do kill_tree "$_k"; done
   kill -TERM "$1" 2>/dev/null || :
+  # A SIGSTOPped process leaves TERM pending forever; CONT lets it run far enough
+  # to die. Harmless for a process that was never stopped.
+  kill -CONT "$1" 2>/dev/null || :
+}
+
+# Escalation for the timeout path: same walk, SIGKILL, which no handler can defer.
+kill_tree_hard() {
+  for _k in $(pgrep -P "$1" 2>/dev/null || :); do kill_tree_hard "$_k"; done
+  kill -KILL "$1" 2>/dev/null || :
 }
 
 rc=0
@@ -119,22 +144,30 @@ trap '[ -n "${agy_pid:-}" ] && kill_tree "$agy_pid"; rm -f "$agy_out" "$agy_err"
 # stdout is captured; stderr is captured only to be inspected for the
 # permission-abort line and is replayed verbatim afterwards, so agy's own
 # diagnostics still reach the caller exactly as they did before.
-agy --mode plan --sandbox --add-dir "$PWD" --print-timeout "${budget_secs}s" -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
+"$AGY_BIN" --mode plan --sandbox --add-dir "$PWD" --print-timeout "${budget_secs}s" -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
 agy_pid=$!
 # Wall clock, not an iteration count: each loop pass costs a kill -0, a sleep and
 # scheduler latency, so counting passes overshoots on a loaded host and stalls
 # entirely across a suspend — and the PTY fallback below already computes its own
 # remaining budget from `date`, so a counter here makes the two disagree.
 deadline=$(( started + budget_secs ))
+# `date` is CLOCK_REALTIME: a backward step (NTP, manual set) pushes the deadline
+# away and the "bound" stops binding. POSIX sh has no monotonic clock, so the
+# 1s-sleep loop doubles as one — whichever limit trips first ends the call, and
+# the iteration ceiling is generous enough that scheduler latency alone (which
+# makes each pass cost slightly more than 1s) never trips it early.
+ticks=0
+tick_ceiling=$(( budget_secs * 3 ))
 while kill -0 "$agy_pid" 2>/dev/null; do
-  if [ "$(date +%s)" -ge "$deadline" ]; then
+  if [ "$(date +%s)" -ge "$deadline" ] || [ "$ticks" -ge "$tick_ceiling" ]; then
     kill_tree "$agy_pid"
     sleep 2
-    kill -KILL "$agy_pid" 2>/dev/null || :
+    kill_tree_hard "$agy_pid"
     killed=1
     break
   fi
   sleep 1
+  ticks=$(( ticks + 1 ))
 done
 wait "$agy_pid" 2>/dev/null || rc=$?
 cat "$agy_err" >&2
