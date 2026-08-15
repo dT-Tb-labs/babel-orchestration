@@ -26,12 +26,24 @@ BUDGET="${AGY_PRINT_TIMEOUT:-180s}"
 # docs themselves use — and killed agy before it could answer. Accept s/m/h, and
 # refuse a budget under 10s rather than starting a call the watchdog will shoot
 # on its first check.
-budget_num=$(printf '%s' "$BUDGET" | tr -dc '0-9')
-[ -n "$budget_num" ] || budget_num=180
+budget_num=${BUDGET%[smh]}
 case "$BUDGET" in
-  *h) budget_secs=$(( budget_num * 3600 )) ;;
-  *m) budget_secs=$(( budget_num * 60 )) ;;
-  *)  budget_secs=$budget_num ;;
+  *[0-9]h) budget_unit=h ;;
+  *[0-9]m) budget_unit=m ;;
+  *[0-9]s) budget_unit=s ;;
+  *[0-9])  budget_unit=s ;;
+  *)       budget_unit=bad ;;
+esac
+# Validate the number before any arithmetic: "1h30m" strips to "1h30", and the old
+# digit-scraping parse turned it into 130 minutes — a bound the caller never asked
+# for, applied silently.
+case "$budget_num" in ''|*[!0-9]*) budget_unit=bad ;; esac
+case "$budget_unit" in
+  h) budget_secs=$(( budget_num * 3600 )) ;;
+  m) budget_secs=$(( budget_num * 60 )) ;;
+  s) budget_secs=$budget_num ;;
+  *) printf 'agyask: AGY_PRINT_TIMEOUT=%s is not a plain <number>[s|m|h] — refusing to guess a bound (compound forms like 1h30m are not supported).\n' "$BUDGET" >&2
+     exit 3 ;;
 esac
 if [ "$budget_secs" -lt 10 ]; then
   printf 'agyask: AGY_PRINT_TIMEOUT=%s is under the 10s floor — refusing to start a call that would be killed immediately.\n' "$BUDGET" >&2
@@ -49,6 +61,13 @@ fi
 # can forget. Set AGY_TOOLS=1 to opt out; then the permission the prompt needs
 # must already exist in that settings file, or the call comes back empty.
 prompt=$*
+# An empty payload must not become a call. Without this the whole prompt is the
+# appended no-tools sentence, agy acknowledges it, and the caller gets a
+# non-empty exit-0 answer about nothing reviewed (protocol.md §4, void round).
+if [ -z "$(printf '%s' "$prompt" | tr -d '[:space:]')" ]; then
+  printf 'agyask: refusing an empty prompt — nothing would be reviewed and the reply would still look clean.\n' >&2
+  exit 3
+fi
 if [ "${AGY_TOOLS:-0}" != "1" ]; then
   prompt="$prompt
 
@@ -74,9 +93,12 @@ agy_err=$(mktemp "${TMPDIR:-/tmp}/agyask-err.XXXXXX") || { rm -f "$agy_out"; exi
 # TERM exit rather than falling through: a POSIX trap handler returns to where it
 # left off, and resuming after the temp files are gone means `cat "$agy_err"`
 # fails under `set -e` and the diagnostics are lost instead of replayed.
+# INT/TERM also kill the agy child: the shim exiting does not reap it, and an agy
+# left running under a dead parent is the orphan that later shows up as "out of
+# pty devices". `${agy_pid:-}` because the traps are armed before the spawn.
 trap 'rm -f "$agy_out" "$agy_err"' EXIT
-trap 'rm -f "$agy_out" "$agy_err"; exit 130' INT
-trap 'rm -f "$agy_out" "$agy_err"; exit 143' TERM
+trap 'kill -TERM ${agy_pid:-0} 2>/dev/null; rm -f "$agy_out" "$agy_err"; exit 130' INT
+trap 'kill -TERM ${agy_pid:-0} 2>/dev/null; rm -f "$agy_out" "$agy_err"; exit 143' TERM
 # stdout is captured; stderr is captured only to be inspected for the
 # permission-abort line and is replayed verbatim afterwards, so agy's own
 # diagnostics still reach the caller exactly as they did before.
@@ -110,6 +132,9 @@ if [ "$killed" -eq 1 ]; then
 fi
 out=$(cat "$agy_out")
 rm -f "$agy_out"
+# Whitespace-only counts as no answer: a stray newline or a stripped ANSI reset
+# would otherwise satisfy a length test and be reported as a completed review.
+if [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then out=""; fi
 if [ -n "$out" ]; then
   printf '%s\n' "$out"
   # Non-zero with output means agy died part-way through its answer: every line
@@ -147,4 +172,8 @@ fi
 PY="$HOME/.local/share/babel/agy-venv/bin/python3"
 [ -x "$PY" ] || PY=python3
 rm -f "$agy_err"
-exec "$PY" "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$prompt" --timeout "$remaining"
+# `--` first: the wrapper takes the prompt as a positional argparse argument, so a
+# payload that begins with a dash is parsed as wrapper options — and a payload of
+# exactly `--help` printed help to stdout and exited 0, which the caller would
+# have ingested as agy's answer.
+exec "$PY" "$HOME/.claude/skills/agy/agy_pty_wrapper.py" --timeout "$remaining" -- "$prompt"

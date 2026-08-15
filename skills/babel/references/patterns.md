@@ -3,7 +3,7 @@
 Audience: the lead LLM running babel. Each section is an executable procedure referenced from its phase in SKILL.md. For communication rules, packet formats, and error handling → **see protocol.md**. This file covers only "when, to whom, what, and in what order to dispatch."
 
 **Reading map by scale** — read only what the scale fires; the rest is dead weight in context:
-- **S**: `#build-debug` + the first paragraph of `#acceptance-gate` (S = one reviewer, one-shot) + protocol.md §0-§4 and §7 (grounding before fixing and repro safety bind at every scale). Skip `#debate-aggregation`, the merge loop, and termination conditions.
+- **S**: `#build-debug` + the first paragraph of `#acceptance-gate` (S = one reviewer, one-shot) **plus "Assert the payload before dispatching it"** — the non-empty/reviewable-lines gate binds at every scale, and S is where a silent empty round has no critic to catch it — + protocol.md §0-§4 and §7 (grounding before fixing and repro safety bind at every scale). Skip `#debate-aggregation`, the merge loop, and termination conditions.
 - **M**: adds `#debate-aggregation`, the full `#acceptance-gate` procedure and merge (one round, no loop), protocol.md §5 (M shape) / §8-§10.
 - **L**: everything, plus advanced.md as pointed to (A1/A5/A6/A9 fire only at L).
 - advanced.md §A2 (stuck playbook) and §A3 (checkpoint) are Phase 2 events, not scale gates — they can fire at any scale; open them when they fire, not before.
@@ -26,7 +26,7 @@ Used in Phase 1 (design). Run only when triage classifies the task as M/L. For S
 Write the payload to `.babel/<task>/inbox/design-req.json` and have SOL read it via `--cwd` (protocol.md §3, to avoid the argv limit). Do not use protocol.md pointers with SOL; embed the output format inline each time (protocol.md §11).
 
 ```bash
-solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON."
+solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON." > .babel/<task>/results/design-sol.raw
 ```
 
 - `--tier normal` (normal for design, deep for diagnosis/critical acceptance).
@@ -34,7 +34,7 @@ solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-re
 
 ### agy launch command template
 
-agy cannot read the fs (protocol.md §1) → do not reference a path to spec.md; inline the spec essentials (goal/criteria/constraints) into the prompt. Use the heredoc env-var form below (avoids double-quote accidents). Keep the payload to the diff-hunk equivalent only, under the 32 KB cap (protocol.md §3).
+agy is sent inline payloads only (protocol.md §1) → do not reference a path to spec.md; inline the spec essentials (goal/criteria/constraints) into the prompt. Build the prompt with the Write tool and dispatch it with `agyask "$(cat <file>)"` — never a heredoc (protocol.md §3). Keep the payload to the diff-hunk equivalent only, under the 32 KB cap.
 
 Write this to `.babel/<task>/inbox/agy-design.txt` with the Write tool (not a heredoc — protocol.md §3):
 
@@ -45,7 +45,7 @@ Output DesignPacket JSON only, no prose. Do not use any tools — answer directl
 
 ```bash
 [ "$(wc -c < .babel/<task>/inbox/agy-design.txt)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
-AGY_PRINT_TIMEOUT=180s agyask "$(cat .babel/<task>/inbox/agy-design.txt)"
+AGY_PRINT_TIMEOUT=180s agyask "$(cat .babel/<task>/inbox/agy-design.txt)" > .babel/<task>/results/design-agy.raw
 ```
 
 Bash `timeout: 200000` applies only if run in the foreground; backgrounded, the bound is `AGY_PRINT_TIMEOUT` enforced by the agyask watchdog (protocol.md §8).
@@ -73,7 +73,7 @@ The diagnosis-handoff playbook for when stuck in Phase 2 (two consecutive failed
 
 ## acceptance-gate
 
-Phase 3 by scale: **S = one adversarially-prompted Claude reviewer** — a single Agent covering all four dimensions, *not* the (a) Workflow (no Opus verify stage, no script); skip the rest. SOL quick is acceptable if already running, but Claude is default because small diffs raise SOL false positives. **M = one (a)(b)(c) round**, lead merge, and C/H fixes; no step-5 loop, convergence check, or completeness critic. After an M fix, re-run one change-impact reviewer whose scope intersects the fix and reported the finding; prefer SOL when several qualify. **The M re-review payload is not an A1 delta** — M's state has no cursors or snapshots (SKILL.md Phase 0 shapes). Rebuild the changeset diff for the fix's paths only (`git diff <baseline-commit> -- <paths>`, minus baseline hunks as above, **plus `git diff --no-index /dev/null "<path>"` for any fixed path that is untracked** — exactly as the main changeset build does, since a task-created file emits nothing from `git diff` against the baseline commit) and send that; it is slightly wider than a true delta and needs no multi-round machinery. That re-review fires **exactly once**: fix any new C/H it returns, then stop. M has no loop, so anything still open after that fix goes to the user as residual risk (user gate) rather than into another round — otherwise the re-review is an unbounded loop wearing M's clothes. **L = full section.** See SKILL.md Phase 0.
+Phase 3 by scale: **S = one adversarially-prompted Claude reviewer** — a single Agent covering all four dimensions, *not* the (a) Workflow (no Opus verify stage, no script); skip the rest. SOL is not dispatched for S acceptance at all (SKILL.md Phase 0): small diffs raise SOL false positives, and S has no second track to catch them. **M = one (a)(b)(c) round**, lead merge, and C/H fixes; no step-5 loop, convergence check, or completeness critic. After an M fix, re-run one change-impact reviewer whose scope intersects the fix and reported the finding; prefer SOL when several qualify. **The M re-review payload is not an A1 delta** — M's state has no cursors or snapshots (SKILL.md Phase 0 shapes). Rebuild the changeset diff for the fix's paths only (`git diff <baseline-commit> -- <paths>`, minus baseline hunks as above, **plus `git diff --no-index /dev/null "<path>"` for any fixed path that is untracked** — exactly as the main changeset build does, since a task-created file emits nothing from `git diff` against the baseline commit) and send that; it is slightly wider than a true delta and needs no multi-round machinery. That re-review fires **exactly once**: fix any new C/H it returns, then stop. It is still a dispatch, so it takes the next `round` index and writes `results/<agent>-r<N>.jsonl` under it (protocol.md §5, write-once) — M has no loop, but it does have two rounds' worth of result files. M has no loop, so anything still open after that fix goes to the user as residual risk (user gate) rather than into another round — otherwise the re-review is an unbounded loop wearing M's clothes. **L = full section.** See SKILL.md Phase 0.
 
 **Review target = the actual changeset at the start of Phase 3**, not the file list estimated during Phase 0 triage — if an out-of-scope shared module was touched during implementation, include it too (agy review #8).
 
@@ -94,12 +94,16 @@ done
 
 ```bash
 D=.babel/<task>/inbox/changeset.diff
-[ -s "$D" ] || { echo 'changeset is empty — the round is void, not clean (§10 channel failure, not convergence)' >&2; exit 1; }
-# Changed text lines = args.diffLines: every +/- line, minus the ---/+++ file
-# headers. Do not filter on a second character — a legitimate `+++i` or `+-1`
-# in the source would be dropped, undercounting the diff and picking too small
-# a reviewer bracket.
-lines=$(( $(grep -c '^[+-]' "$D") - $(grep -cE '^(\+\+\+|---) ' "$D") ))
+[ -s "$D" ] || { echo 'changeset is empty — the round is void, not clean (protocol.md §4)' >&2; exit 1; }
+# Changed text lines = args.diffLines. Ask git, do not pattern-match the diff:
+# a removed source line reading "-- value" renders as "--- value" and a naive
+# header subtraction eats it, while `^[+-][^+-]` drops a legitimate `+++i`.
+# Either way the count is wrong and the reviewer bracket is picked too small.
+# `git apply --numstat` reads the dispatched payload itself, so the count matches
+# what the reviewers actually get (baseline hunks already subtracted, untracked
+# files already appended). Binary files report "-" and contribute 0, which is
+# exactly the void-round signal below.
+lines=$(git apply --numstat "$D" | awk '{a+=$1+$2} END{print a+0}')
 [ "$lines" -gt 0 ] || { echo "void round: changeset has 0 reviewable text lines (binary-only?) — report as void, do not dispatch" >&2; exit 1; }
 ```
 
@@ -170,5 +174,5 @@ AGY_PRINT_TIMEOUT=240s agyask "$(cat .babel/<task>/inbox/agy-r<N>.txt)"
 ### Termination condition
 
 - **Convergence**: a round with zero new C/H is a *candidate* clean round, not convergence. Run the completeness critic (L-only, `advanced.md` §A5) after it and converge only if the critic is empty too. This holds for round 1 as well — a clean first round is the case where an uncovered dimension is most likely to be the reason nothing was found.
-- **Cap — two counters, two distinct triggers.** The hard ceiling is **`round` = 8**; no path extends past it. The user-approval trigger is **`budget.rounds_consumed` = 4**: before dispatching a round that would run with 4 already consumed, ask, with the added token estimate attached. **A round on which new C/H decreased consumes nothing** — trending toward convergence is not the failure mode either trigger exists for; a flat or divergent round consumes 1 (protocol.md §5 defines both counters; `round` also names result files and scoreboard entries, which is why it increments every dispatch regardless). **Plus a floor the lead cannot compute away: ask before dispatching round 5 (`round` = 5) regardless of `rounds_consumed`.** "New C/H decreased" is derived from the lead's own semantic dedup calls, and stopping to ask is a cost to the lead, so the consumption rule alone leaves the only brake on eight rounds of spend in the hands of the party that pays for pulling it — and a finding stream that merely trickles down (20, 19, 18…) consumes nothing forever. Under the floor, a steadily-converging task asks once at round 5 and continues; a thrashing one still asks earlier on the consumed-budget trigger. So a task that converges steadily reaches round 5 before asking, and a task that thrashes asks after its 4th non-progressing round (pilot 2's hard spot: 7 rounds total, under the ceiling, approval obtained on the consumed-budget trigger). At the ceiling, the lead does one final reconsideration at maximum depth, then presents residual findings to the user (user gate "acceptance result" / "residual risk").
+- **Cap — two counters, three distinct triggers.** The hard ceiling is **`round` = 8**; no path extends past it. The user-approval trigger is **`budget.rounds_consumed` = 4**: before dispatching a round while `rounds_consumed` is already 4, ask, with the added token estimate attached (SKILL.md Phase 0 states the same trigger in the same words). **A round on which new C/H decreased consumes nothing** — trending toward convergence is not the failure mode either trigger exists for; a flat or divergent round consumes 1 (protocol.md §5 defines both counters; `round` also names result files and scoreboard entries, which is why it increments every dispatch regardless). **Plus a floor the lead cannot compute away: ask before dispatching round 5 (`round` = 5) regardless of `rounds_consumed`.** "New C/H decreased" is derived from the lead's own semantic dedup calls, and stopping to ask is a cost to the lead, so the consumption rule alone leaves the only brake on eight rounds of spend in the hands of the party that pays for pulling it — and a finding stream that merely trickles down (20, 19, 18…) consumes nothing forever. Under the floor, a steadily-converging task asks once at round 5 and continues; a thrashing one still asks earlier on the consumed-budget trigger. So a task that converges steadily reaches round 5 before asking, and a task that thrashes asks after its 4th non-progressing round (pilot 2's hard spot: 7 rounds total, under the ceiling, approval obtained on the consumed-budget trigger). At the ceiling, the lead does one final reconsideration at maximum depth, then presents residual findings to the user (user gate "acceptance result" / "residual risk").
 - **Crew stretch/shrink for L multi-round**: read the above convergence/extension decisions together with `channel_scoreboard` outcomes — channel dropping, routing weighting, and early folding are scoreboard-driven (`advanced.md` §A9; ephemeral, grounding-driven only, per protocol.md §7 invariant).

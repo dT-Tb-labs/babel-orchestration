@@ -29,6 +29,7 @@ import argparse
 import os
 import re
 import select
+import signal
 import shutil
 import sys
 import time
@@ -124,7 +125,15 @@ def main() -> int:
             sys.stderr.write("agy executable not found on PATH or in known locations. Pass --agy-path.\n")
         return 3
 
-    cmd = [agy_path, "-p", args.prompt, "--print-timeout", args.print_timeout]
+    # Same flags the direct path pins in agyask. Without them the documented
+    # guarantee ("agyask pins --mode plan --sandbox, so agy cannot act") was false
+    # on exactly this path — the one taken when the direct call returns nothing,
+    # i.e. when things are already going wrong. --add-dir mirrors agyask too:
+    # agy answers "No active workspace is set." without a workspace.
+    cmd = [
+        agy_path, "--mode", "plan", "--sandbox", "--add-dir", os.getcwd(),
+        "--print-timeout", args.print_timeout, "-p", args.prompt,
+    ]
     if args.model:
         cmd += ["--model", args.model]
     try:
@@ -133,14 +142,33 @@ def main() -> int:
         sys.stderr.write(f"Failed to spawn agy under PTY: {exc}\n")
         return 3
 
-    deadline = time.time() + args.timeout
+    # A signal aimed at the wrapper would otherwise leave agy running under its
+    # PTY with nobody left to read or reap it — the orphan case that fills the
+    # host with stale processes until "out of pty devices".
+    def _kill_child(_signum, _frame):
+        try:
+            proc.terminate(force=True)
+        except Exception:
+            pass
+        sys.stderr.write("agy_pty_wrapper: signalled; terminated the agy child.\n")
+        os._exit(143)
+
+    for _sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(_sig, _kill_child)
+        except (ValueError, OSError):  # not the main thread / unsupported
+            pass
+
+    # Monotonic: a wall-clock jump (NTP correction, manual set) would otherwise
+    # push the deadline out and leave the "bounded" child running past its budget.
+    deadline = time.monotonic() + args.timeout
     # Accumulate raw chunks without decoding per-read: on POSIX the backend
     # returns bytes and a multibyte UTF-8 char can straddle a read boundary,
     # so we join first and decode once at the end.
     chunks: list = []
     timed_out = False
     while True:
-        if time.time() > deadline:
+        if time.monotonic() > deadline:
             sys.stderr.write(f"Timeout after {args.timeout}s\n")
             timed_out = True
             try:
@@ -210,9 +238,24 @@ def main() -> int:
             % len(clean)
         )
         return 2
+    # A PTY merges the child's stderr into the same stream, so a failing agy's
+    # diagnostics look exactly like an answer: non-empty text, exit 0. Ask the
+    # child what it actually did before calling this a review.
+    try:
+        proc.wait()
+        child_status = proc.exitstatus
+        child_signal = proc.signalstatus
+    except Exception:
+        child_status, child_signal = None, None
     # Write via buffer to avoid cp932 encode errors on Windows with emoji output
     sys.stdout.buffer.write(clean.encode("utf-8", errors="replace"))
     sys.stdout.buffer.flush()
+    if child_signal is not None:
+        sys.stderr.write(f"agy_pty_wrapper: agy died on signal {child_signal}; treat the text above as incomplete.\n")
+        return 2
+    if child_status not in (0, None):
+        sys.stderr.write(f"agy_pty_wrapper: agy exited {child_status}; treat the text above as incomplete.\n")
+        return 2
     return 0 if clean.strip() else 2
 
 
