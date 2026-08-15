@@ -44,23 +44,36 @@ esac
 if [ "$CHECK_ONLY" -eq 0 ]; then
   printf 'Installing skills -> %s\n' "$DEST"
   mkdir -p "$DEST"
+
+  # One installer at a time. mkdir is atomic on every POSIX filesystem, so this
+  # is a real lock, not a check-then-act: it also covers the venv creation below,
+  # which was its own check-then-act race.
+  LOCK="$DEST/.babel-install.lock"
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    printf '  [FAIL] another install is running (%s exists). Wait for it, or remove that directory if it is stale.\n' "$LOCK"
+    exit 1
+  fi
+  trap 'rmdir "$LOCK" 2>/dev/null || :' EXIT INT TERM
+
+  # Per-file atomic replace, never a directory swap. A directory swap always has
+  # a window where the target does not exist, and a live shim exec'ing its
+  # wrapper in that window fails and reports the channel dead. Renaming each file
+  # into place has no such window: every path is either the old file or the new
+  # one, whole, at all times.
   for s in babel cdx-sol agy; do
     if [ -d "$SRC_DIR/$s" ]; then
-      # Copy beside the target, then swap. `rm -rf` first leaves a window where a
-      # live shim's exec target (agy_pty_wrapper.py, cdx-sol.mjs) is missing or
-      # half-written, and a babel round running during a re-install then reports
-      # that channel dead. The swap is two renames, not one, so it is not atomic
-      # either — but it is short and holds no partially-copied tree.
-      # $$ in the staging names: two installers running at once would otherwise
-      # share .new/.old and delete each other's half-installed tree. This makes a
-      # concurrent run non-destructive, not correct — the final rename still
-      # races, and the loser can nest its tree under the winner. Do not run two
-      # installs at once; nothing here makes that safe.
-      rm -rf "$DEST/.$s.new.$$" "$DEST/.$s.old.$$"
-      cp -R "$SRC_DIR/$s" "$DEST/.$s.new.$$"
-      if [ -d "$DEST/$s" ]; then mv "$DEST/$s" "$DEST/.$s.old.$$"; fi
-      mv "$DEST/.$s.new.$$" "$DEST/$s"
-      rm -rf "$DEST/.$s.old.$$"
+      (cd "$SRC_DIR/$s" && find . -type f) | while IFS= read -r f; do
+        rel=${f#./}
+        mkdir -p "$DEST/$s/$(dirname "$rel")"
+        cp "$SRC_DIR/$s/$rel" "$DEST/$s/.$(basename "$rel").tmp.$$"
+        mv "$DEST/$s/.$(basename "$rel").tmp.$$" "$DEST/$s/$rel"
+      done
+      # Remove files the source no longer has, after the new ones are in place.
+      (cd "$DEST/$s" && find . -type f) | while IFS= read -r f; do
+        rel=${f#./}
+        case "$rel" in .*|*/.*) continue ;; esac
+        [ -f "$SRC_DIR/$s/$rel" ] || rm -f "$DEST/$s/$rel"
+      done
       ok "copied $s"
     else
       note "source skill missing: $s (skipped)"

@@ -82,8 +82,22 @@ started=$(date +%s)
 # measured, not assumed. Without this watchdog a wedged agy blocks forever and
 # the caller waits for a completion notification that never arrives. `timeout(1)`
 # is not present on stock macOS, hence the hand-rolled wait loop.
-# ponytail: kills the direct child only; a grandchild that outlives it is not
-# reaped. Move to setsid + process-group kill if orphans are ever observed.
+# Kills the whole descendant tree, not just the direct child: agy spawns a
+# language-server process of its own, and killing only the pid we hold left that
+# grandchild running under init — the accumulation that eventually surfaced as
+# "out of pty devices". setsid is not on stock macOS, so walk the tree with
+# pgrep instead (children first, so nothing re-parents away mid-walk).
+# Depth-first: collect descendants before signalling, so a killed parent cannot
+# orphan a child we have not recorded yet.
+kill_tree() {
+  # Signal via $1, never a variable: POSIX sh functions have no local scope, so a
+  # recursive call overwrote a shared `_pid` and every non-leaf — agy itself
+  # included — was skipped while the last leaf was signalled twice. Positional
+  # parameters ARE per-invocation, which is what makes this recursion safe.
+  for _k in $(pgrep -P "$1" 2>/dev/null || :); do kill_tree "$_k"; done
+  kill -TERM "$1" 2>/dev/null || :
+}
+
 rc=0
 killed=0
 agy_out=$(mktemp "${TMPDIR:-/tmp}/agyask.XXXXXX") || exit 3
@@ -100,8 +114,8 @@ trap 'rm -f "$agy_out" "$agy_err"' EXIT
 # `${agy_pid:-0}` would have been catastrophic: kill(1) reads 0 as "every process
 # in my process group", so a signal arriving before the spawn would have taken the
 # caller down with it. Only signal a pid we actually have.
-trap '[ -n "${agy_pid:-}" ] && kill -TERM "$agy_pid" 2>/dev/null; rm -f "$agy_out" "$agy_err"; exit 130' INT
-trap '[ -n "${agy_pid:-}" ] && kill -TERM "$agy_pid" 2>/dev/null; rm -f "$agy_out" "$agy_err"; exit 143' TERM
+trap '[ -n "${agy_pid:-}" ] && kill_tree "$agy_pid"; rm -f "$agy_out" "$agy_err"; exit 130' INT
+trap '[ -n "${agy_pid:-}" ] && kill_tree "$agy_pid"; rm -f "$agy_out" "$agy_err"; exit 143' TERM
 # stdout is captured; stderr is captured only to be inspected for the
 # permission-abort line and is replayed verbatim afterwards, so agy's own
 # diagnostics still reach the caller exactly as they did before.
@@ -114,7 +128,7 @@ agy_pid=$!
 deadline=$(( started + budget_secs ))
 while kill -0 "$agy_pid" 2>/dev/null; do
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    kill -TERM "$agy_pid" 2>/dev/null || :
+    kill_tree "$agy_pid"
     sleep 2
     kill -KILL "$agy_pid" 2>/dev/null || :
     killed=1
