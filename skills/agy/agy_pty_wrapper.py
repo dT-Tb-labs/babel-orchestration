@@ -145,13 +145,15 @@ def main() -> int:
     # A signal aimed at the wrapper would otherwise leave agy running under its
     # PTY with nobody left to read or reap it — the orphan case that fills the
     # host with stale processes until "out of pty devices".
-    def _kill_child(_signum, _frame):
+    def _kill_child(signum, _frame):
         try:
             proc.terminate(force=True)
         except Exception:
             pass
         sys.stderr.write("agy_pty_wrapper: signalled; terminated the agy child.\n")
-        os._exit(143)
+        # 128 + signal number, so an interrupt still reports 130 like the direct
+        # path does; a single hard-coded 143 made SIGINT look like SIGTERM.
+        os._exit(128 + signum)
 
     for _sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -245,8 +247,14 @@ def main() -> int:
         proc.wait()
         child_status = proc.exitstatus
         child_signal = proc.signalstatus
-    except Exception:
-        child_status, child_signal = None, None
+    except Exception as exc:
+        # Unknown is not fine. A PTY merges the child's stderr into stdout, so
+        # "there is text" proves nothing about success; without a status we cannot
+        # call this a completed review.
+        sys.stderr.write(f"agy_pty_wrapper: could not read agy's exit status ({exc}); treating output as unverified.\n")
+        sys.stdout.buffer.write(clean.encode("utf-8", errors="replace"))
+        sys.stdout.buffer.flush()
+        return 2
     # Write via buffer to avoid cp932 encode errors on Windows with emoji output
     sys.stdout.buffer.write(clean.encode("utf-8", errors="replace"))
     sys.stdout.buffer.flush()

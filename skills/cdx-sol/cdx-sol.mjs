@@ -64,8 +64,13 @@ function guardOutput(text, cwd, offloadChars = OFFLOAD_CHARS) {
     fs.mkdirSync(dir, { recursive: true });
     // Write the ignore rule once. Rewriting it every call silently discarded any
     // edit the user had made to that file.
+    // Append the rule if the file exists without it: preserving a user's file is
+    // right, but leaving offloaded model output committable is not.
     const ignore = path.join(dir, ".gitignore");
-    if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, "*\n", "utf8"); // never commit offloaded model output
+    const cur = fs.existsSync(ignore) ? fs.readFileSync(ignore, "utf8") : "";
+    if (!cur.split(/\r?\n/).some(l => l.trim() === "*")) {
+      fs.writeFileSync(ignore, cur ? `${cur.replace(/\n?$/, "\n")}*\n` : "*\n", "utf8");
+    }
     // pid + counter, not just a millisecond stamp: two calls landing in the same
     // millisecond would name the same file and one answer would overwrite the other.
     const file = path.join(dir, `sol-output-${Date.now()}-${process.pid}-${offloadSeq++}.md`);
@@ -201,11 +206,13 @@ function launchBackground({ prompt, cwd, effort, write }) {
 }
 
 function waitLoop(jobId, cwd, wallCapMs = WALL_CAP_MS) {
-  const start = Date.now();
+  // Monotonic clock: a backward NTP correction on Date.now() would extend the
+  // poll past the bound this function exists to enforce.
+  const start = performance.now();
   const SAFETY_MS = 5000; // never let a slice run past wallCapMs (keeps total < Claude's Bash timeout)
   let unknownStreak = 0;
   while (true) {
-    const remaining = wallCapMs - (Date.now() - start);
+    const remaining = wallCapMs - (performance.now() - start);
     if (remaining <= SAFETY_MS) return "running"; // graceful: caller re-attaches
     const slice = Math.min(POLL_TIMEOUT_MS, remaining - SAFETY_MS);
     // Hard bound one slice above what the companion was asked to wait, so a slice
@@ -242,11 +249,14 @@ function fetchResult(jobId, cwd) {
   // clean-looking pass for a job nobody can show output from.
   const res = j.storedJob?.result;
   const text = res?.rawOutput || j.storedJob?.rendered || "";
-  if (!res && !text) throw new Error(`Job ${jobId} has no stored result to read`);
+  // Test the text, not the container: `result: {}` is truthy, so the old
+  // `!res && !text` let an empty answer through with status 0 — the exact silent
+  // pass this guard exists to stop.
+  if (!text) throw new Error(`Job ${jobId} has no stored result to read`);
   return { text, status: res?.status ?? 0 };
 }
 
-const START_MS = Date.now();
+const START_MS = performance.now();
 
 function main() {
   const o = parseArgs(process.argv.slice(2));
@@ -267,7 +277,7 @@ function main() {
   // The advertised bound is the whole process, not the poll loop: a 60s launch
   // plus a 540s poll plus a 60s result fetch is 660s, past the 600s a foreground
   // caller allows. Spend what the launch already used, and keep a fetch reserve.
-  const pollCap = WALL_CAP_MS - (Date.now() - START_MS) - 60000;
+  const pollCap = WALL_CAP_MS - (performance.now() - START_MS) - 60000;
   const status = waitLoop(jobId, o.cwd, Math.max(pollCap, 10000));
   if (status === "running") {
     console.log(`SOL_STILL_RUNNING ${jobId}`);
