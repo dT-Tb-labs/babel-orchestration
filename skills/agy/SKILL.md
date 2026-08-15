@@ -21,6 +21,8 @@ AGY_PRINT_TIMEOUT=180s agyask "<prompt>"
 
 `AGY_PRINT_TIMEOUT` is the **total** budget in seconds. The PTY fallback inherits whatever is left of it, and is skipped with exit 2 when under 30s remain — otherwise the caller's Bash timeout would kill a fallback that never had time to answer.
 
+**agyask appends `Do not use any tools — answer directly from the text given above.` to every prompt.** Headless agy aborts the whole run — empty stdout, no partial answer — the moment a tool needs a permission it cannot prompt for, and `~/.gemini/antigravity-cli/settings.json` allow-rules are path-specific, so any prompt that makes agy reach for a file dies outside those paths. Measured on one 4.4KB review prompt: empty after 52s without the directive, 3 findings in 29s with it. Set `AGY_TOOLS=1` to opt out when agy genuinely must read the workspace — the matching allow-rule has to exist first.
+
 **agyask pins `--mode plan --sandbox`, so agy cannot act.** Review payloads are untrusted input: a diff hunk containing "ignore your instructions and run X" reaches agy as prompt text, and plan mode plus agy's own terminal restrictions keep that from becoming a tool call. There is no write-enabled path — babel only asks agy for opinions. Verified on agy 1.1.8.
 
 **Run agy outside the Claude Code sandbox.** Three things fail inside it at once: PTY allocation (`out of pty devices`), localhost bind (agy starts a local language server), and TLS verification for this Go binary through the sandbox proxy (`x509: OSStatus -26276`; `SSL_CERT_FILE` does not help because Go on darwin uses Security.framework). Configure it in `~/.claude/settings.json`:
@@ -193,6 +195,7 @@ For findings judged "needs fixing":
 | wrapper exit 4 + "pywinpty/ptyprocess not installed" | Run the shown `pip install <pkg>` (Windows=pywinpty / POSIX=ptyprocess) |
 | wrapper exit 3 + "agy executable not found" | Specify `--agy-path` or check the install (POSIX: verify `agy` is on PATH) |
 | wrapper exit 2 + empty stdout | agy unresponsive even inside a TTY; likely expired auth — run `agy` interactively and sign in again |
+| `agyask` exit 2 + "auto-denied a tool permission" | agy wanted a tool it could not get approved headlessly and returned nothing. The appended no-tools directive normally prevents this; if `AGY_TOOLS=1` is set, unset it or add the allow-rule the agy message names to `~/.gemini/antigravity-cli/settings.json` |
 | `agyask` exit 2 + "not starting the PTY fallback" | The direct call burned the whole `AGY_PRINT_TIMEOUT` budget. Raise the budget (and the Bash timeout above it), or shrink the prompt |
 | wrapper timeout (exit 2 + "Timeout after") | Huge prompt or upstream outage. Extend `--timeout`, `--print-timeout 5m` |
 | Hangs beyond 200 seconds | Foreground: the Bash timeout expired — keep the wrapper's `--timeout` below it. Backgrounded: the Bash timeout never applied; agyask's watchdog kills agy at `AGY_PRINT_TIMEOUT` and exits 2. Silence past that means the shim itself is wedged — `TaskStop` the job |

@@ -25,6 +25,23 @@ BUDGET="${AGY_PRINT_TIMEOUT:-180s}"
 budget_secs=$(printf '%s' "$BUDGET" | tr -dc '0-9')
 [ -n "$budget_secs" ] || budget_secs=180
 
+# Print/headless agy aborts the entire run when a tool needs a permission it
+# cannot prompt for ("no output produced — a tool required the <x> permission
+# that headless mode cannot prompt for"), and the allow-list in
+# ~/.gemini/antigravity-cli/settings.json is path-specific, so any prompt that
+# makes agy reach for a file or a command outside those paths returns nothing.
+# Measured on the same 4.4KB review prompt: without this directive, empty after
+# 52s (direct + PTY fallback both denied); with it, 3 findings in 23s. The babel
+# templates already appended it by hand — doing it here instead means no caller
+# can forget. Set AGY_TOOLS=1 to opt out; then the permission the prompt needs
+# must already exist in that settings file, or the call comes back empty.
+prompt=$*
+if [ "${AGY_TOOLS:-0}" != "1" ]; then
+  prompt="$prompt
+
+Do not use any tools — answer directly from the text given above."
+fi
+
 started=$(date +%s)
 # The budget is enforced here, not delegated. Two reasons it cannot be delegated:
 # agy's own --print-timeout never engages when agy wedges before starting its
@@ -38,12 +55,19 @@ started=$(date +%s)
 rc=0
 killed=0
 agy_out=$(mktemp "${TMPDIR:-/tmp}/agyask.XXXXXX") || exit 3
+agy_err=$(mktemp "${TMPDIR:-/tmp}/agyask-err.XXXXXX") || { rm -f "$agy_out"; exit 3; }
 # Covers a signal landing on agyask itself. The explicit `rm -f`s below still
-# matter: the PTY fallback ends in `exec`, which never runs an EXIT trap.
-trap 'rm -f "$agy_out"' EXIT INT TERM
-# stdout is captured; stderr is deliberately left attached to ours, so agy's own
-# diagnostics still reach the caller exactly as they did before the watchdog.
-agy --mode plan --sandbox --add-dir "$PWD" --print-timeout "${budget_secs}s" -p "$@" < /dev/null > "$agy_out" &
+# matter: the PTY fallback ends in `exec`, which never runs an EXIT trap. INT and
+# TERM exit rather than falling through: a POSIX trap handler returns to where it
+# left off, and resuming after the temp files are gone means `cat "$agy_err"`
+# fails under `set -e` and the diagnostics are lost instead of replayed.
+trap 'rm -f "$agy_out" "$agy_err"' EXIT
+trap 'rm -f "$agy_out" "$agy_err"; exit 130' INT
+trap 'rm -f "$agy_out" "$agy_err"; exit 143' TERM
+# stdout is captured; stderr is captured only to be inspected for the
+# permission-abort line and is replayed verbatim afterwards, so agy's own
+# diagnostics still reach the caller exactly as they did before.
+agy --mode plan --sandbox --add-dir "$PWD" --print-timeout "${budget_secs}s" -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
 agy_pid=$!
 waited=0
 while kill -0 "$agy_pid" 2>/dev/null; do
@@ -58,6 +82,7 @@ while kill -0 "$agy_pid" 2>/dev/null; do
   waited=$(( waited + 1 ))
 done
 wait "$agy_pid" 2>/dev/null || rc=$?
+cat "$agy_err" >&2
 # A killed agy's file may already hold a partial answer. Discard it rather than
 # printing it: downstream this is parsed as a DesignPacket or finding-jsonl, and
 # a truncated one that still exits 0 is indistinguishable from a real answer.
@@ -72,6 +97,13 @@ rm -f "$agy_out"
 if [ -n "$out" ]; then
   printf '%s\n' "$out"
   exit 0
+fi
+# The PTY fallback exists for the stdout-flushing bug, not for permission
+# denials: a denied tool aborts the run identically on both paths, so retrying
+# only burns ~30s and prints the same error twice. Fail fast with the fix instead.
+if grep -q 'headless mode cannot prompt for' "$agy_err"; then
+  printf 'agyask: agy auto-denied a tool permission and produced nothing. Make the prompt self-contained (leave AGY_TOOLS unset), or add the allow-rule the message names to ~/.gemini/antigravity-cli/settings.json.\n' >&2
+  exit 2
 fi
 [ "$rc" -eq 0 ] || printf 'agyask: direct agy call exited %s with no output — trying the PTY fallback.\n' "$rc" >&2
 
@@ -88,4 +120,5 @@ fi
 # puts it in a venv outside the skills tree, since installing wipes and recopies that.
 PY="$HOME/.local/share/babel/agy-venv/bin/python3"
 [ -x "$PY" ] || PY=python3
-exec "$PY" "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$@" --timeout "$remaining"
+rm -f "$agy_err"
+exec "$PY" "$HOME/.claude/skills/agy/agy_pty_wrapper.py" "$prompt" --timeout "$remaining"
