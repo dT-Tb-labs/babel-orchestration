@@ -152,10 +152,13 @@ function parseArgs(a) {
 // auth, EPERM on the state root) never returns, so the remaining-budget check
 // below it is never reached and the caller waits forever for a notification that
 // cannot arrive. A backgrounded call has no harness timeout to fall back on.
-function runCompanion(args, cwd, timeoutMs) {
+// Default the bound rather than making it opt-in: an omitted argument would put
+// the unbounded wedge back, and a call site that forgets is exactly how it got
+// here. Callers that wait on purpose pass their own, larger value.
+function runCompanion(args, cwd, timeoutMs = 60000) {
   const r = spawnSync(process.execPath, [COMPANION, ...args], {
     cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
-    ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" } : {}),
+    timeout: timeoutMs, killSignal: "SIGKILL",
   });
   if (r.error) {
     if (r.error.code === "ETIMEDOUT") {
