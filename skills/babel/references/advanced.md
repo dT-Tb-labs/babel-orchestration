@@ -510,7 +510,7 @@ Within one task, autonomously adjust channel composition with **no human gate**.
 
 **Sole signal — grounded outcomes**: use only the `grounded` records in `state.json.channel_scoreboard` (protocol.md §5), each carrying the check that produced it, and derive `confirmed`/`refuted` from them. Never use subjective lead/LLM evaluation (`protocol.md` §7 invariant), and never read a record with no `check` — a label with no evidence behind it is a lead's opinion wearing a grounding label, and this rule is the only consumer that would spend crew composition on it.
 
-**Reward = `Σ(1/reporters over confirmed records) / tokens`**, not `confirmed/token`. Every channel that reported a finding keeps the full `confirmed` label (protocol.md §7 — labels describe findings, not races), but a defect three channels all reported pays each of them 1/3, while one only that channel saw pays 1. Under the unsplit form the cheapest way to lead the reward was to report whatever is most likely to be reported by everyone, which selects for high-base-rate obvious findings and against exactly the independent coverage a multi-channel crew is bought for. The split is order-independent, so it reintroduces no latency race. `confirmed`/`refuted` **counts** still drive the drop rules below unchanged: a channel that only ever confirms duplicates is earning less reward, but it is not producing false positives, and dropping it is not what this measures.
+**Reward = `Σ(1/reporters over confirmed records) / tokens`**, not `confirmed/token`. Every channel that reported a finding keeps the full `confirmed` label (protocol.md §7 — labels describe findings, not races), but a defect three channels all reported pays each of them 1/3, while one only that channel saw pays 1. Under the unsplit form the cheapest way to lead the reward was to report whatever is most likely to be reported by everyone, which selects for high-base-rate obvious findings and against exactly the independent coverage a multi-channel crew is bought for. The split is order-independent, so it reintroduces no latency race. **Measured bound on what this buys**: on a 2-round run where both externals reviewed the same payload, *every* confirmed finding had `reporters: 2`, so the split rescaled both channels identically and reordered nothing. Duplicate credit only discriminates when coverage genuinely diverges — which is an argument for giving channels different scopes or dimensions, not against the split, whose purpose is to stop a channel from *farming* the overlap. `confirmed`/`refuted` **counts** still drive the drop rules below unchanged: a channel that only ever confirms duplicates is earning less reward, but it is not producing false positives, and dropping it is not what this measures.
 
 **Measured prior (round-1 composition)**: the in-Claude (a) track **starts folded** — one agent carrying all four dimensions, the small-bracket shape — regardless of diff size, and expands to its bracket width only after earning a grounded `confirmed`. This prior is a static default for **every L round 1**, not part of the online bandit — it applies even when the ≥3-round firing condition above never fires (an L task expected to converge in one round still starts (a) folded; there is simply no later round for the bandit to adjust). Rationale: on the one instrumented multi-round run, (a) was ~250× below the best channel on `confirmed/token`; full-width round 1 re-pays that measured loss every task just to let the bandit re-learn it. This is an N=1 prior, so it sets only the *starting* width — the fold-reversal rule below governs everything after round 1, and coverage is still guarded because a folded (a) covers all four dimensions in one prompt and the A5 critic checks for uncovered dimensions at every candidate clean round. (This paragraph is not the online loop writing itself into the conventions — it entered via the offline path, cross-task analysis plus the human gate, exactly the route the last paragraph of this section requires.) Degraded modes are exempt: when (a) is the only track (both externals dead, or single-channel minimal mode), it runs at full bracket width from round 1 — there the prior's comparison channel does not exist.
 
@@ -549,6 +549,20 @@ Within one task, autonomously adjust channel composition with **no human gate**.
   The fold-on-reward rule below is what reaches it — findings that ground `refuted`,
   or as duplicates, earn almost no split reward per token — and a stream of refuted
   ones reaches the false-positive drop rule instead.
+- **The fold rule below is inert for SOL and agy as the shims stand, and saying so is
+  part of the rule.** Measured on a 2-round instrumented run: `solask` and `agyask`
+  return the answer text and nothing else — `cdx-sol.mjs` ends at
+  `return { text, status }`, discarding the companion's job record — so neither
+  channel's spend reaches the lead, both are recorded `tokens: null`, and both sit
+  out reward comparison by §5's own rule against guessing. The (a) track is then the
+  only channel with a denominator, and one channel is not a comparison, so **no fold
+  decision is available in the standard three-channel L crew**. What actually governs
+  the externals is the two drop rules, which need no cost term. Do not paper over
+  this by estimating their spend — that is precisely the flattery §5 forbids, and a
+  wrong denominator folds a channel for a number the lead invented. The upgrade path
+  is a shim that surfaces the provider's usage record; until one does, treat the fold
+  rule as an (a)-track-and-future rule and say so in the crew report rather than
+  implying the crew was compared.
 - **Fold on reward before dropping on failure**: the drop rule above needs
   `confirmed=0`, which a channel earning one finding per round never hits no matter
   what it costs. So also compare the split reward across channels each round and
