@@ -140,6 +140,16 @@ descendants() {
   for _d in $(pgrep -P "$1" 2>/dev/null || :); do descendants "$_d"; printf '%s ' "$_d"; done
 }
 
+# Every walk above hides pgrep's own failure behind `2>/dev/null || :`, which is
+# right for "this pid has no children" and wrong for "pgrep is missing or cannot
+# read the process table" — the second silently degrades tree cleanup to killing
+# the direct child while the run still reports an ordinary timeout. Say so once.
+# (Measured case: inside the Claude Code sandbox pgrep fails with "Cannot get
+# process list", which is exactly why these shims are sandbox-excluded.)
+if ! pgrep -P $$ >/dev/null 2>&1 && ! pgrep -l -P 1 >/dev/null 2>&1; then
+  printf 'agyask: pgrep cannot read the process table here — on a timeout only the direct agy child is killed, its descendants survive. Cleanup is degraded for this run.\n' >&2
+fi
+
 rc=0
 killed=0
 agy_out=$(mktemp "${TMPDIR:-/tmp}/agyask.XXXXXX") || exit 3
@@ -234,11 +244,15 @@ fi
 # Empty output. Fall back to the PTY path only with enough budget left for it to
 # finish — otherwise the caller's Bash timeout kills a fallback that never had a
 # chance, and the failure looks like agy hanging rather than running out of time.
-remaining=$(( budget_secs - ($(date +%s) - started) ))
-# `date` can step backwards, which makes the elapsed term negative and hands the
-# fallback *more* than the total budget the caller asked for. The two phases
-# together must never exceed it.
-[ "$remaining" -gt "$budget_secs" ] && remaining=$budget_secs
+# Elapsed is the larger of what the wall clock says and what the watchdog actually
+# counted. `date` can step backwards, which alone made the elapsed term negative
+# and handed the fallback *more* than the caller's total budget; clamping to the
+# full budget was not enough either, since the direct phase had already spent most
+# of it and the two phases together came to roughly twice what was asked for.
+_elapsed=$(( $(date +%s) - started ))
+[ "$ticks" -gt "$_elapsed" ] && _elapsed=$ticks
+[ "$_elapsed" -lt 0 ] && _elapsed=0
+remaining=$(( budget_secs - _elapsed ))
 if [ "$remaining" -lt 30 ]; then
   printf 'agyask: no output and only %ss of the %ss budget left — not starting the PTY fallback.\n' \
     "$remaining" "$budget_secs" >&2

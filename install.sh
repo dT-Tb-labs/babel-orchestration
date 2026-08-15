@@ -36,8 +36,11 @@ agy_present() {
 
 # ---- OS detection (for the PTY backend hint) ----
 case "$(uname -s 2>/dev/null || echo unknown)" in
-  MINGW*|MSYS*|CYGWIN*|Windows_NT) OS=windows ; PTY_PKG=pywinpty ;;
-  *) OS=posix ; PTY_PKG=ptyprocess ;;
+  # Pinned: this package is imported by a Python that runs OUTSIDE the Claude Code
+  # sandbox, so an unpinned install makes any future release of it — or a registry
+  # compromise — privileged code on this host. Bump deliberately, not silently.
+  MINGW*|MSYS*|CYGWIN*|Windows_NT) OS=windows ; PTY_PKG=pywinpty==2.0.15 ;;
+  *) OS=posix ; PTY_PKG=ptyprocess==0.7.0 ;;
 esac
 
 # ---- copy ----
@@ -87,7 +90,14 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
   # Remove only a lock we still own. After a takeover the previous holder is dead,
   # but the fresh-lock race above is not the only way two installers can overlap,
   # and an unconditional rm here deletes the *other* installer's lock on exit.
-  trap '[ "$(cat "$LOCK/pid" 2>/dev/null || echo "")" = "$$" ] && rm -rf "$LOCK" 2>/dev/null; :' EXIT INT TERM
+  # EXIT cleans up; INT/TERM clean up AND exit. A POSIX trap handler returns to
+  # where it left off, so sharing one handler across all three meant a signal
+  # released the lock and then let the install carry on copying unlocked — with a
+  # second installer free to start on top of it.
+  _unlock() { [ "$(cat "$LOCK/pid" 2>/dev/null || echo "")" = "$$" ] && rm -rf "$LOCK" 2>/dev/null; : ; }
+  trap '_unlock' EXIT
+  trap '_unlock; exit 130' INT
+  trap '_unlock; exit 143' TERM
 
   # Per-file atomic replace, never a directory swap. A directory swap always has
   # a window where the target does not exist, and a live shim exec'ing its
@@ -131,7 +141,10 @@ fi
 printf '\nSelf-test:\n'
 
 # babel (required): files present at destination
-if [ -f "$DEST/babel/SKILL.md" ] && [ -f "$DEST/babel/references/protocol.md" ] && [ -f "$DEST/babel/references/patterns.md" ]; then
+# advanced.md is in the required set, not optional: L acceptance, the delta routing
+# and the stuck playbook all dispatch out of it, and an interrupted copy that left
+# it behind used to self-test as a complete install.
+if [ -f "$DEST/babel/SKILL.md" ] && [ -f "$DEST/babel/references/protocol.md" ] && [ -f "$DEST/babel/references/patterns.md" ] && [ -f "$DEST/babel/references/advanced.md" ]; then
   ok "babel (lead) installed"
   pass=$((pass+1))
 else
