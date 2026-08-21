@@ -97,6 +97,20 @@ if [ -z "$AGY_BIN" ]; then
   exit 3
 fi
 
+# Usage reporting (BABEL_USAGE on stderr) needs a JSON parser, because agy only
+# reports its token spend under --output-format json and the answer text then
+# arrives inside an envelope that sh cannot safely take apart (the response field
+# carries newlines and quotes). Resolve the same venv interpreter the PTY fallback
+# uses — and *only* that one. The fallback's last resort is a bare `python3` off
+# PATH, which is acceptable there because the fallback is already a degraded path;
+# hoisting a PATH lookup onto the primary answer path of a sandbox-excluded shim
+# would let a planted `python3` read every prompt babel sends. No venv, no JSON
+# mode: the call runs exactly as it did before and the round reports tokens: null,
+# which is the documented correct outcome for an unavailable usage record.
+USAGE_PY="$HOME/.local/share/babel/agy-venv/bin/python3"
+[ -x "$USAGE_PY" ] || USAGE_PY="$HOME/.local/share/babel/agy-venv/Scripts/python.exe"
+if [ -x "$USAGE_PY" ]; then AGY_JSON_ARGS="--output-format json"; else AGY_JSON_ARGS=""; fi
+
 started=$(date +%s)
 # The budget is enforced here, not delegated. Two reasons it cannot be delegated:
 # agy's own --print-timeout never engages when agy wedges before starting its
@@ -171,7 +185,10 @@ trap '[ -n "${agy_pid:-}" ] && kill_tree "$agy_pid"; rm -f "$agy_out" "$agy_err"
 # stdout is captured; stderr is captured only to be inspected for the
 # permission-abort line and is replayed verbatim afterwards, so agy's own
 # diagnostics still reach the caller exactly as they did before.
-"$AGY_BIN" --mode plan --sandbox --add-dir "$PWD" --print-timeout "${budget_secs}s" -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
+# $AGY_JSON_ARGS is unquoted on purpose: it is either empty or the two fixed
+# tokens set above, never anything a caller supplies.
+# shellcheck disable=SC2086
+"$AGY_BIN" --mode plan --sandbox --add-dir "$PWD" --print-timeout "${budget_secs}s" $AGY_JSON_ARGS -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
 agy_pid=$!
 # Wall clock, not an iteration count: each loop pass costs a kill -0, a sleep and
 # scheduler latency, so counting passes overshoots on a loaded host and stalls
@@ -218,6 +235,63 @@ rm -f "$agy_out"
 # Whitespace-only counts as no answer: a stray newline or a stripped ANSI reset
 # would otherwise satisfy a length test and be reported as a completed review.
 if [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then out=""; fi
+# Unwrap the envelope BEFORE the "did we get an answer" test below, so an envelope
+# carrying an empty answer reaches the PTY fallback exactly as an empty plain-text
+# answer always did.
+#
+# A leading `{` is NOT the discriminator, and that was the first thing wrong here:
+# a real review answer *starts* with `{"receipt":…}`, so an agy build that ignored
+# --output-format and returned finding-jsonl would be misread as an envelope and
+# every valid review would die as a channel failure. Structure decides instead —
+# parses as one JSON object carrying a string `response` = envelope; parses
+# line-by-line as JSONL = the answer itself; neither = refuse to print it, because
+# the one thing that must never happen is an envelope reaching a caller that
+# ingests every stdout line as a finding.
+if [ -n "$out" ] && [ -n "$AGY_JSON_ARGS" ]; then
+  # `if _resp=$(...)` and not a bare assignment: this script runs under `set -e`,
+  # where an assignment whose command substitution exits non-zero kills the shell
+  # outright — which silently swallowed both non-envelope exits and printed nothing.
+  if _resp=$(printf '%s' "$out" | "$USAGE_PY" -c '
+import json, sys
+def _ok(s):
+    try:
+        json.loads(s)
+        return True
+    except Exception:
+        return False
+raw = sys.stdin.read().strip()          # .strip(): leading whitespace must not decide this
+try:
+    j = json.loads(raw)
+except Exception:
+    # Not one JSON document. Either finding-jsonl (every line parses), plain text
+    # from an agy that ignored the flag, or a truncated envelope. Only the last is
+    # refused, and only a leading brace can make it look like one — plain prose
+    # must pass through, since that is the pre-change contract.
+    lines = [l for l in raw.splitlines() if l.strip()]
+    jsonl = bool(lines) and all(_ok(l) for l in lines)
+    sys.exit(4 if jsonl or not raw.startswith("{") else 3)
+if not isinstance(j, dict) or not isinstance(j.get("response"), str):
+    sys.exit(4)
+r = j["response"]
+if not r.strip():
+    sys.exit(5)                         # envelope, empty answer -> treat as no output
+sys.stdout.write(r)
+u = j.get("usage")
+u = u.get("total_tokens") if isinstance(u, dict) else None   # usage may be any type
+ok = isinstance(u, int) and not isinstance(u, bool)
+sys.stderr.write("BABEL_USAGE {\"provider\":\"agy\",\"total_tokens\":%s}\n" % (u if ok else "null"))
+'); then _prc=0; else _prc=$?; fi
+  case "$_prc" in
+    0) out=$_resp ;;
+    4) : ;;                             # not an envelope: $out already is the answer
+    5) out="" ;;                        # falls through to the empty-output path below
+    *) printf 'agyask: --output-format json produced output that is neither an envelope nor valid finding-jsonl; refusing to print it.\n' >&2
+       # `if`, not `[ ] && exit`: under set -e a failing test in a bare && list
+       # ends the script with 1, which is neither agy's status nor ours.
+       if [ "$rc" -ne 0 ]; then exit "$rc"; fi   # keep agy's own status when it had one
+       exit 3 ;;
+  esac
+fi
 if [ -n "$out" ]; then
   printf '%s\n' "$out"
   # Non-zero with output means agy died part-way through its answer: every line
