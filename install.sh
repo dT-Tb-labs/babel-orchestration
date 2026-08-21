@@ -261,6 +261,71 @@ PYEOF
       else
         note "agyask not on PATH — babel calls agy through it. Add $BIN to PATH (channel degrades off until then)."
       fi
+      # agyask's usage reporting runs agy under --output-format json and then owns
+      # stdout: it must print the response text and nothing else, because the caller
+      # parses every stdout line as a finding and an envelope is valid JSON on every
+      # line. Exercised against a stub agy on the three shapes that decide it —
+      # a good envelope, an envelope with no usage, and a truncated one. Mutation-
+      # checked: dropping the parser's exit-3 guard makes the truncated case print
+      # `{"conversation_id":` to stdout and exit 0.
+      # Gated on the venv interpreter, because agyask only turns JSON mode on when
+      # it finds one. Without it the shim runs exactly as it always did and reports
+      # tokens: null — documented graceful degradation, not a failure, so asserting
+      # the JSON contract there would fail an install that is working as designed.
+      if [ -x "$HOME/.local/share/babel/agy-venv/bin/python3" ] || [ -x "$HOME/.local/share/babel/agy-venv/Scripts/python.exe" ]; then
+      _stub="$BIN/.agyask-stub.$$"
+      cat > "$_stub" <<'STUB'
+#!/bin/sh
+case "$STUB_CASE" in
+ok) cat <<'J'
+{"status":"SUCCESS","response":"line1\nline2\n","usage":{"total_tokens":12}}
+J
+;;
+nousage) cat <<'J'
+{"status":"SUCCESS","response":"hi"}
+J
+;;
+badusage) cat <<'J'
+{"status":"SUCCESS","response":"hi","usage":"unavailable"}
+J
+;;
+jsonl) cat <<'J'
+{"receipt":{"tokens":["t-a","t-b"],"paths":["x.py"],"dimensions":["correctness"],"unread":[]}}
+["F1","H","x.py",1,"claim","evidence"]
+J
+;;
+text) printf 'plain answer\n' ;;
+broken) printf '%s' '{"conversation_id":' ;;
+esac
+STUB
+      chmod +x "$_stub"
+      _p="agyask usage self-check padded past the payload floor"
+      _run() { STUB_CASE=$1 AGY_PATH="$_stub" AGY_PRINT_TIMEOUT=30s "$BIN/agyask" "$_p" 2>/dev/null || :; }
+      _usage() { STUB_CASE=$1 AGY_PATH="$_stub" AGY_PRINT_TIMEOUT=30s "$BIN/agyask" "$_p" 2>&1 >/dev/null | grep -c "$2" || :; }
+      _o1=$(_run ok); _u1=$(_usage ok 'BABEL_USAGE {"provider":"agy","total_tokens":12}')
+      _u2=$(_usage nousage '"total_tokens":null')
+      _u3=$(_usage badusage '"total_tokens":null')   # usage present but not an object
+      _o4=$(_run jsonl); _o5=$(_run text); _o6=$(_run broken)
+      rm -f "$_stub"
+      # The jsonl case is the one that matters most: a real review answer starts
+      # with `{"receipt":…}`, so an agy build that ignores --output-format returns
+      # something that *looks* like an envelope. It must pass through verbatim, not
+      # be unwrapped and not be refused. The text case is the pre-change contract.
+      if [ "$_o1" = "line1
+line2" ] \
+         && [ "$_u1" -ge 1 ] && [ "$_u2" -ge 1 ] && [ "$_u3" -ge 1 ] \
+         && [ "${_o4#\{\"receipt\"}" != "$_o4" ] && [ "${_o4%\"evidence\"]}" != "$_o4" ] \
+         && [ "$_o5" = "plain answer" ] && [ -z "$_o6" ]; then
+        ok "agyask usage reporting holds (envelope unwrapped, finding-jsonl passed through, plain text unchanged, garbage refused, usage null when unavailable)"
+        pass=$((pass+1))
+      else
+        printf '  [FAIL] agyask usage self-check: contract broken (envelope=%s usage=%s null=%s badusage=%s jsonl=%s text=%s garbage_stdout=%s)\n' \
+          "$_o1" "$_u1" "$_u2" "$_u3" "$_o4" "$_o5" "$_o6"
+        exit 1
+      fi
+      else
+        note "agy-venv python not found — agyask runs in plain-text mode and the channel reports tokens: null (fine; the usage self-check is skipped)."
+      fi
       note "agy runs outside the Claude Code sandbox: add \"agyask\" AND \"agyask *\" to sandbox.excludedCommands in ~/.claude/settings.json (list both forms: on Claude Code 2.1.220 either alone works, but the docs use the wildcard form in one place and bare names in another, so the pair is free insurance). An excluded command runs unsandboxed — read the shim and README 'What the sandbox exclusion costs you' first, or skip it and let the channel degrade off."
     else
       note "agy binary not found (PATH or known locations) — install agy and sign in by running it interactively once, or pass --agy-path. Channel will degrade off."

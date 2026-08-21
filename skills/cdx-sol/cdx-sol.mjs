@@ -104,6 +104,61 @@ function guardOutput(text, cwd, offloadChars = OFFLOAD_CHARS) {
   }
 }
 
+// --- usage reporting -------------------------------------------------------
+// The companion's stored job record carries no token count: its `result` holds
+// status / threadId / rawOutput / touchedFiles / reasoningSummary and nothing
+// else (verified against a real completed job). codex itself does record the
+// spend, in the rollout log it writes per thread, so that log is the only place
+// the number exists. Everything here degrades to null rather than to a guess —
+// babel folds a channel on reward-per-token, and an invented denominator folds
+// the wrong channel.
+
+// A thread id arrives inside JSON the companion produced, which makes it
+// external data reaching a path join. Anything that is not exactly a uuid is
+// refused, so no `..` and no separator can ever get into the filename.
+const THREAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// Last wins: the rollout records a running total after every turn, so the final
+// occurrence is the whole job's spend. Deliberately a scan for the field rather
+// than a per-line JSON.parse — the log is append-only and a half-written last
+// line is normal, and one unparseable line must not cost the totals before it.
+function extractTotalTokens(jsonlText) {
+  let last = null;
+  const re = /"total_token_usage"\s*:\s*\{[^}]*?"total_tokens"\s*:\s*(\d+)/g;
+  for (const m of jsonlText.matchAll(re)) last = Number(m[1]);
+  return Number.isInteger(last) ? last : null;
+}
+
+// `root` is a parameter only so the selftest can point it at a fixture directory;
+// nothing in the normal path passes it. Without the seam the walk is untestable
+// short of writing into the real ~/.codex.
+function findRolloutPath(threadId, root = path.join(os.homedir(), ".codex", "sessions")) {
+  if (!THREAD_ID_RE.test(threadId || "")) return null;
+  const suffix = `-${threadId}.jsonl`;
+  // sessions/<yyyy>/<mm>/<dd>/rollout-<ts>-<threadId>.jsonl — a fixed depth, so
+  // walk it explicitly instead of recursing an unbounded tree.
+  const dirs = (p) => { try { return fs.readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { return []; } };
+  for (const y of dirs(root)) for (const m of dirs(path.join(root, y))) for (const d of dirs(path.join(root, y, m))) {
+    const dir = path.join(root, y, m, d);
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    const hit = names.find((n) => n.endsWith(suffix));
+    if (hit) return path.join(dir, hit);
+  }
+  return null;
+}
+
+function readUsage(threadId) {
+  try {
+    const p = findRolloutPath(threadId);
+    if (!p) return null;
+    // A rollout of a long job is large but bounded; refuse a pathological one
+    // rather than reading it into memory to report one integer.
+    if (fs.statSync(p).size > 64 * 1024 * 1024) return null;
+    return extractTotalTokens(fs.readFileSync(p, "utf8"));
+  } catch { return null; }
+}
+
 function runSelftest() {
   assert.equal(tierToEffort("quick"), "low");
   assert.equal(tierToEffort("normal"), "medium");
@@ -121,6 +176,30 @@ function runSelftest() {
 
   const rw = buildLaunchArgs({ prompt: "fix bug", cwd: "C:/x", effort: "high", write: true });
   assert.ok(rw.includes("--write"));
+
+  // Usage extraction: last total wins, absence is null (never 0), and a
+  // half-written final line does not cost the totals recorded before it.
+  assert.equal(extractTotalTokens('{"info":{"total_token_usage":{"total_tokens":18159}}}\n{"info":{"total_token_usage":{"input_tokens":1,"total_tokens":54960}}}\n'), 54960);
+  assert.equal(extractTotalTokens('{"info":{"total_token_usage":{"total_tokens":7}}}\n{"info":{"total_tok'), 7);
+  assert.equal(extractTotalTokens('{"response":"no usage here"}\n'), null);
+  assert.equal(extractTotalTokens(""), null);
+  // A thread id is external data on its way into a path. Only a uuid gets there.
+  assert.equal(findRolloutPath("../../etc/passwd"), null);
+  assert.equal(findRolloutPath(""), null);
+  assert.equal(findRolloutPath(null), null);
+  assert.equal(readUsage("not-a-uuid"), null);
+  // Rollout discovery over a fixture tree: found by threadId suffix at the real
+  // yyyy/mm/dd depth, and a different threadId in the same tree finds nothing.
+  {
+    const tid = "01a01fa0-a3fe-7933-a434-b03cbb634633";
+    const fx = fs.mkdtempSync(path.join(os.tmpdir(), "cdx-sol-selftest-"));
+    const day = path.join(fx, "2026", "08", "20");
+    fs.mkdirSync(day, { recursive: true });
+    fs.writeFileSync(path.join(day, `rollout-2026-08-20T23-43-36-${tid}.jsonl`), "x\n");
+    assert.equal(path.basename(findRolloutPath(tid, fx)), `rollout-2026-08-20T23-43-36-${tid}.jsonl`);
+    assert.equal(findRolloutPath("00000000-0000-4000-8000-000000000000", fx), null);
+    fs.rmSync(fx, { recursive: true, force: true });
+  }
 
   const small = guardOutput("hello", process.cwd());
   assert.equal(small.rendered, "hello");
@@ -271,7 +350,7 @@ function fetchResult(jobId, cwd) {
   // `!res && !text` let an empty answer through with status 0 — the exact silent
   // pass this guard exists to stop.
   if (!text) throw new Error(`Job ${jobId} has no stored result to read`);
-  return { text, status: res?.status ?? 0 };
+  return { text, status: res?.status ?? 0, threadId: res?.threadId ?? j.storedJob?.threadId ?? null };
 }
 
 const START_MONO = performance.now(), START_WALL = Date.now();
@@ -310,9 +389,13 @@ function main() {
     process.exit(3);
   }
 
-  const { text, status: exitStatus } = fetchResult(jobId, o.cwd);
+  const { text, status: exitStatus, threadId } = fetchResult(jobId, o.cwd);
   const guarded = guardOutput(text, o.cwd, o.offloadChars);
   process.stdout.write(guarded.rendered + "\n");
+  // stderr, never stdout: a caller redirects stdout into the round's .raw file
+  // and parses every line of it as a finding. Same line shape as agyask, so the
+  // lead reads one format for both external channels.
+  process.stderr.write(`BABEL_USAGE {"provider":"sol","total_tokens":${readUsage(threadId) ?? "null"}}\n`);
   if (status !== "completed" || exitStatus !== 0) {
     console.error(`\n[SOL job ${jobId} status=${status} exit=${exitStatus}]`);
     process.exit(1);
