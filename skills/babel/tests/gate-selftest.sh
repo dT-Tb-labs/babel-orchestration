@@ -22,11 +22,13 @@ grep -q '^reject() {' "$BLOCK" || { echo "FAIL: block calls reject but never def
 grep -q '^ROOT=' "$BLOCK"      || { echo "FAIL: block compares against ROOT but never sets it"; exit 1; }
 grep -v '^gate "\$path"' "$BLOCK" > "$BLOCK.src"
 sh -n "$BLOCK.src" || { echo "FAIL: extracted block is not valid sh"; exit 1; }
-ROOT=
+# The block must derive ROOT itself. Sourcing it here and comparing would also
+# accept `ROOT=$REPO`, which works only because this test happens to define REPO;
+# run it in a fresh sh that has none of the test's variables instead.
+blockroot=$(sh -c '. "$1" >/dev/null 2>&1; printf %s "${ROOT-}"' _ "$BLOCK.src")
+[ "$blockroot" = "$REPO" ] ||
+  { echo "FAIL: block set ROOT to '$blockroot' on its own, expected '$REPO'"; exit 1; }
 . "$BLOCK.src"
-# the block must set ROOT to the repo root itself; the fixture root below
-# overwrites it, so this is the only place a wrong ROOT= line is observable.
-[ "$ROOT" = "$REPO" ] || { echo "FAIL: block set ROOT to '$ROOT', expected '$REPO'"; exit 1; }
 
 # a throwaway root, so every banned path below is a file that really exists:
 # a gate that rejects only because the file is missing has not been tested.
@@ -35,7 +37,8 @@ cd "$TMP/repo" || exit 1
 ROOT=$PWD
 for f in .env .env.local server.pem server.key id_rsa id_ed25519 \
          .ssh/config .aws/credentials my_secret.md api_token.json db_password.txt \
-         'version..js' plain.txt sub/id_rsa sub/deep.txt valid_id_rsa_parser.c; do
+         'version..js' plain.txt sub/id_rsa sub/deep.txt \
+         valid_id_rsa_parser.c valid_id_ed25519_helper.c; do
   : > "$f"
 done
 ln -sf /etc/passwd link.txt
@@ -70,6 +73,7 @@ allow plain.txt
 allow sub/deep.txt
 allow 'version..js'              # a double dot is not a traversal component
 allow valid_id_rsa_parser.c      # §7 bans the filename id_rsa, not the substring
+allow valid_id_ed25519_helper.c  # same, for the other key name
 
 [ "$fails" -eq 0 ] && { echo "gate-selftest: PASS"; exit 0; }
 echo "gate-selftest: $fails FAILURE(S)"; exit 1
