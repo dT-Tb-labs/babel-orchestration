@@ -50,6 +50,14 @@ if [ "$budget_secs" -lt 10 ]; then
   exit 3
 fi
 
+# One line on stderr, before the call, naming when this call must be over. The
+# watchdog below already bounds the call; what this adds is a bound the CALLER can
+# read. A lead waiting on a background job has no clock and gets no notification
+# from a wedged shim, so "past its bound" is a condition it can otherwise never
+# evaluate (protocol.md §8). stdout stays the findings channel, untouched.
+printf 'BABEL_DEADLINE {"provider":"agy","cap_s":%s,"deadline":%s}\n' \
+  "$budget_secs" "$(( $(date +%s) + budget_secs ))" >&2
+
 # Print/headless agy aborts the entire run when a tool needs a permission it
 # cannot prompt for ("no output produced — a tool required the <x> permission
 # that headless mode cannot prompt for"), and the allow-list in

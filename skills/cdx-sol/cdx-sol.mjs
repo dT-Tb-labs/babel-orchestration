@@ -364,6 +364,16 @@ function main() {
     process.exit(2);
   }
 
+  // One line on stderr, BEFORE the launch, naming when this call must be over.
+  // WALL_CAP_MS already bounds the call; what this adds is a bound the CALLER can
+  // read. A lead waiting on a background job has no clock and gets no notification
+  // from a wedged shim, so "past its bound" is a condition it can otherwise never
+  // evaluate (protocol.md §8). Written first so a wedge during launch is covered
+  // too. Same line shape as agyask, stdout untouched.
+  process.stderr.write(
+    `BABEL_DEADLINE {"provider":"sol","cap_s":${Math.round(WALL_CAP_MS / 1000)},` +
+    `"deadline":${Math.round((START_WALL + WALL_CAP_MS) / 1000)}}\n`);
+
   let jobId;
   if (o.attach) {
     jobId = o.attach;
