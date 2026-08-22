@@ -9,8 +9,9 @@ node_modules/
 .babel/
 .sol/
 
-# gate-selftest scratch root
+# selftest scratch roots
 .gate-selftest-tmp/
+.deadline-selftest-tmp/
 
 # OS
 .DS_Store

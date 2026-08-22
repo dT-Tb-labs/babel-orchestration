@@ -170,7 +170,20 @@ A `paths` entry that escapes the repo root is a receipt failure, not the §7 acc
 ## 8. Parallelization and barriers
 
 - Launch SOL + agy simultaneously via `run_in_background`; the lead proceeds with its own work without waiting. Harness notification signals completion (no polling needed).
-- **A background job has no harness timeout.** The Bash `timeout:` parameter is ignored once `run_in_background: true` is set (measured: a 25s command under `timeout: 5000` ran to completion). Every wall-clock bound therefore comes from the channel's own shim — `solask` caps polling at ~9 min (`WALL_CAP_MS`) and returns `SOL_STILL_RUNNING`; `agyask` enforces `AGY_PRINT_TIMEOUT` with its own watchdog because agy's `--print-timeout` does not engage when agy wedges before starting. The `timeout:` values in the launch templates are for the foreground case only; do not treat them as the bound on a backgrounded call. **A call that has run past its shim's bound is a wedged shim, not a slow model**: stop it with `TaskStop` and take the §10 "dead" row for that channel. A lead that keeps waiting for a notification that is not coming is the failure this rule exists to prevent.
+- **A background job has no harness timeout.** The Bash `timeout:` parameter is ignored once `run_in_background: true` is set (measured: a 25s command under `timeout: 5000` ran to completion). Every wall-clock bound therefore comes from the channel's own shim — `solask` caps polling at ~9 min (`WALL_CAP_MS`) and returns `SOL_STILL_RUNNING`; `agyask` enforces `AGY_PRINT_TIMEOUT` with its own watchdog because agy's `--print-timeout` does not engage when agy wedges before starting. The `timeout:` values in the launch templates are for the foreground case only; do not treat them as the bound on a backgrounded call. **A call that has run past its shim's bound is a wedged shim, not a slow model**: stop it with `TaskStop` and take the §10 "dead" row for that channel. A lead that keeps waiting for a notification that is not coming is the failure this rule exists to prevent — and it is a failure the lead cannot see, because it has no clock and a wedged shim sends nothing. So the bound is written down where the lead already reads: **each shim emits one `BABEL_DEADLINE {"provider":…,"cap_s":…,"deadline":<epoch>}` line on stderr before it starts**, into the same `.err` the `BABEL_USAGE` line lands in (§5). Run this at every barrier (below) and before calling a round complete:
+
+```bash
+now=$(date +%s)
+for e in .babel/<task>/results/*-r<N>.err; do            # no match => nothing was dispatched
+  [ -e "$e" ] || { echo 'no .err files: no dispatch redirected stderr (§5)'; break; }
+  d=$(sed -n 's/.*"deadline":\([0-9][0-9]*\).*/\1/p' "$e" | head -1)
+  [ -n "$d" ] || { echo "$e: no BABEL_DEADLINE — the shim never started"; continue; }
+  [ -s "${e%.err}.raw" ] && continue                     # it answered; nothing to judge here
+  [ "$now" -gt "$d" ] && echo "${e%.err}: $((now - d))s past its own bound — wedged shim (TaskStop, then §10 dead)"
+done
+```
+
+A channel this prints is dead for the round; one it does not print is either answered or still inside its bound, and waiting is correct. **Ceiling**: this is a check, not a timer. Nothing wakes a lead that never runs it, so it converts "notice that time passed" — which the lead cannot do — into "read a file", which it already does every round for the receipt. The empty-glob branch matters as much as the timing one: a template that redirected only stdout produces no `.err` at all, and the loop would otherwise iterate once over a literal `*-r<N>.err` and report nothing wrong. Verify the block with `sh skills/babel/tests/deadline-check.sh`, which extracts it from this file rather than copying it.
 - **But a barrier is mandatory at merge / fix / revision boundaries.** Parallel execution crossing these boundaries is prohibited (prevents verification against an old code version).
 - **Reviewers are mutually blind within the same round**: a reviewer does not receive other reviewers' findings within the same round (prevents acceptance-side orchestration collapse). The lead alone merges and cross-references.
 
