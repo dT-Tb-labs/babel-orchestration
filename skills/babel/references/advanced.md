@@ -425,21 +425,23 @@ const upheld = verified.filter(f => f.verdict.real)
 // refutation* — the verifier was ordered not to open the path. Letting it fall into
 // `rejected` would send the lead to ground exactly the credential-bearing path the
 // verifier was barred from, since the lead grounds every rejected C unconditionally.
-// It joins `unresolved` instead, which is the bucket the lead judges rather than scores.
+// It returns as its OWN key, not folded into `unresolved`: a non-empty `unresolved`
+// is defined below as a §7 schema-gate failure that costs the track a retry and then
+// the round, and a verifier that correctly declined to open a credential path is the
+// opposite of a malformed answer. Folding it in there just moves the defect.
 const accessBlocked = verified.filter(f => !f.verdict.real && f.verdict.basis === 'unresolved_access')
 const rejected = verified.filter(f => !f.verdict.real && f.verdict.basis !== 'unresolved_access')
   .map(f => ({ ...f, rejectedBecause: f.verdict.reason, rejectedOn: f.verdict.basis }))
 const rejectedCH = rejected.filter(isCH)
 const unresolved = all.filter(f => !f.verdict && isCH(f))    // verifier never ruled on these
-  .concat(accessBlocked.filter(isCH))                        // …plus the banned-path case
 const unverified = all.filter(f => !f.verdict && !isCH(f))   // M/L, deliberately unverified
 const cappedDimensions = [...capped]
 log(`${upheld.length}/${verified.length} C/H upheld; ${rejectedCH.length} C/H rejected by the verifier and returned for lead grounding; ${unresolved.length} C/H unresolved; ${unverified.length} M/L unverified; ${failedDimensions.length} dimension(s) failed; ${cappedDimensions.length} capped`)
-return { upheld, rejected, unresolved, unverified, failedDimensions, cappedDimensions, receipts }
+return { upheld, rejected, accessBlocked, unresolved, unverified, failedDimensions, cappedDimensions, receipts }
 ```
 The return names are deliberate: **`upheld`, never `confirmed`** — `confirmed` is a scoreboard label that only lead grounding writes (protocol.md §7), and a key called `confirmed` coming out of an LLM verifier is exactly the confusion that lets a verdict be copied into `channel_scoreboard`. `rejected` carries the full findings with `rejectedBecause` and `rejectedOn` (the closed-set basis above); the lead grounds every rejected C, reads every rejected H, and lists whatever it did not ground in the acceptance report as *verifier-rejected, ungrounded*, naming the basis. The basis is what makes rejections comparable across rounds and channels — a rejection reading `weak_evidence` and one reading `existing_mitigation` are different claims about the codebase, and the second is checkable in a way the first is not. Its ceiling: a verifier that wants to reject anyway can pick the nearest label, so the closed set raises the cost of a lazy rejection without making one impossible. `receipts` is what the round actually opened — carry `paths`/`unread` into `reviewed_scope` (protocol.md §5) rather than assuming the dispatched scope was the reviewed scope.
 
-A non-empty `failedDimensions` means that dimension was never reviewed — the round is not a candidate clean round no matter how few findings came back, and the dimension is re-dispatched or declared dropped to the user. A non-empty `cappedDimensions` means that dimension returned as many findings as the cap allows and dropped the rest: it was truncated, not covered, so re-dispatch it on the narrowed scope before reading the round as converged. A non-empty `unresolved` is a §7 schema-gate failure, not a clean result: re-request that batch once, and if it comes back short again treat the track as degraded for the round (protocol.md §10) rather than reporting those C/H as if nobody found them. At merge time the lead normalizes the Workflow's schema output into finding-jsonl + global ID. Without the Workflow tool, substitute Agent-parallel review for the dimension-split review.
+A non-empty `failedDimensions` means that dimension was never reviewed — the round is not a candidate clean round no matter how few findings came back, and the dimension is re-dispatched or declared dropped to the user. A non-empty `cappedDimensions` means that dimension returned as many findings as the cap allows and dropped the rest: it was truncated, not covered, so re-dispatch it on the narrowed scope before reading the round as converged. A non-empty `accessBlocked` is neither: the verifier obeyed the access list and declined to open a credential-bearing path, so those findings go to the lead to judge and to the report as unresolved-by-access — never a retry, never a track failure. A non-empty `unresolved` is a §7 schema-gate failure, not a clean result: re-request that batch once, and if it comes back short again treat the track as degraded for the round (protocol.md §10) rather than reporting those C/H as if nobody found them. At merge time the lead normalizes the Workflow's schema output into finding-jsonl + global ID. Without the Workflow tool, substitute Agent-parallel review for the dimension-split review.
 
 **Launch**: `Workflow({scriptPath, args: {diff, spec, diffLines, round, digest, receiptTokens, fold?}})` — `diff` is the
 path chosen by the round rule in the script's header comment, `diffLines` its

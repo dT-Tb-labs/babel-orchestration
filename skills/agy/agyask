@@ -254,6 +254,12 @@ if [ -n "$out" ] && [ -n "$AGY_JSON_ARGS" ]; then
   if _resp=$(printf '%s' "$out" | "$USAGE_PY" -c '
 import json, sys
 def _ok(s):
+    # A clean review is the receipt line followed by the literal NONE, which is not
+    # JSON. Without this the whole answer fails the JSONL test, and because the
+    # receipt makes it start with "{" it would be refused as a truncated envelope —
+    # a zero-findings review turned into a channel failure.
+    if s.strip() == "NONE":
+        return True
     try:
         json.loads(s)
         return True

@@ -294,6 +294,11 @@ jsonl) cat <<'J'
 ["F1","H","x.py",1,"claim","evidence"]
 J
 ;;
+jsonlnone) cat <<'J'
+{"receipt":{"tokens":["t-a","t-b"],"paths":["x.py"],"dimensions":["correctness"],"unread":[]}}
+NONE
+J
+;;
 text) printf 'plain answer\n' ;;
 broken) printf '%s' '{"conversation_id":' ;;
 esac
@@ -305,7 +310,7 @@ STUB
       _o1=$(_run ok); _u1=$(_usage ok 'BABEL_USAGE {"provider":"agy","total_tokens":12}')
       _u2=$(_usage nousage '"total_tokens":null')
       _u3=$(_usage badusage '"total_tokens":null')   # usage present but not an object
-      _o4=$(_run jsonl); _o5=$(_run text); _o6=$(_run broken)
+      _o4=$(_run jsonl); _o5=$(_run text); _o6=$(_run broken); _o7=$(_run jsonlnone)
       rm -f "$_stub"
       # The jsonl case is the one that matters most: a real review answer starts
       # with `{"receipt":…}`, so an agy build that ignores --output-format returns
@@ -315,12 +320,14 @@ STUB
 line2" ] \
          && [ "$_u1" -ge 1 ] && [ "$_u2" -ge 1 ] && [ "$_u3" -ge 1 ] \
          && [ "${_o4#\{\"receipt\"}" != "$_o4" ] && [ "${_o4%\"evidence\"]}" != "$_o4" ] \
-         && [ "$_o5" = "plain answer" ] && [ -z "$_o6" ]; then
-        ok "agyask usage reporting holds (envelope unwrapped, finding-jsonl passed through, plain text unchanged, garbage refused, usage null when unavailable)"
+         && [ "$_o5" = "plain answer" ] && [ -z "$_o6" ] \
+         && [ "${_o7##*
+}" = "NONE" ]; then
+        ok "agyask usage reporting holds (envelope unwrapped, finding-jsonl and receipt+NONE passed through, plain text unchanged, garbage refused, usage null when unavailable)"
         pass=$((pass+1))
       else
-        printf '  [FAIL] agyask usage self-check: contract broken (envelope=%s usage=%s null=%s badusage=%s jsonl=%s text=%s garbage_stdout=%s)\n' \
-          "$_o1" "$_u1" "$_u2" "$_u3" "$_o4" "$_o5" "$_o6"
+        printf '  [FAIL] agyask usage self-check: contract broken (envelope=%s usage=%s null=%s badusage=%s jsonl=%s text=%s garbage_stdout=%s clean_none=%s)\n' \
+          "$_o1" "$_u1" "$_u2" "$_u3" "$_o4" "$_o5" "$_o6" "$_o7"
         exit 1
       fi
       else
