@@ -14,8 +14,10 @@ BLOCK=$TMP/block.sh
 awk '/^```bash$/{b="";inb=1;next} /^```$/{if(inb&&b~/BABEL_DEADLINE/){printf "%s",b;exit} inb=0;next} inb{b=b $0 "\n"}' \
   "$DOC" > "$BLOCK"
 grep -q 'BABEL_DEADLINE' "$BLOCK" || { echo "FAIL: deadline block not found in $DOC"; exit 1; }
-# the block is written against .babel/<task>/results/*-r<N>.err; point it at the fixture
-sed 's#\.babel/<task>/results/\*-r<N>\.err#'"$TMP"'/results/*-r1.err#' "$BLOCK" > "$BLOCK.src"
+# Rewrite only the directory prefix and the round placeholder, never the glob
+# itself: a sed keyed on the whole pattern would turn any change to the glob into
+# "invalid sh" instead of letting the coverage cases judge it.
+sed -e 's#\.babel/<task>/results/#'"$TMP"'/results/#' -e 's#<N>#1#g' "$BLOCK" > "$BLOCK.src"
 sh -n "$BLOCK.src" || { echo "FAIL: extracted block is not valid sh"; exit 1; }
 
 R=$TMP/results
@@ -64,6 +66,15 @@ rm -f "$R"/sol-r1.*
 printf 'BABEL_DEADLINE {"provider":"agy","cap_s":300,"deadline":%s}\n' "$past" > "$R/agy-r1.err"
 : > "$R/agy-r1.raw"
 expect 'past its own bound' 'agy line shape'
+
+# 8. the dispatch shapes that carry no -r<N>: design, diagnosis, checkpoint.
+#    These wait longest unattended, and a round-scoped glob misses every one.
+for stem in design-sol design-agy stuck-2-sol stuck-2-agy checkpoint-r1-sol; do
+  rm -f "$R"/*.err "$R"/*.raw
+  printf 'BABEL_DEADLINE {"provider":"sol","cap_s":540,"deadline":%s}\n' "$past" > "$R/$stem.err"
+  : > "$R/$stem.raw"
+  expect 'past its own bound' "wedged $stem"
+done
 
 [ "$fails" -eq 0 ] && { echo "deadline-check: PASS"; exit 0; }
 echo "deadline-check: $fails FAILURE(S)"; exit 1
