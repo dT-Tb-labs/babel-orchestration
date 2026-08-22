@@ -174,7 +174,8 @@ A `paths` entry that escapes the repo root is a receipt failure, not the §7 acc
 
 ```bash
 now=$(date +%s)
-for e in .babel/<task>/results/*-r<N>.err; do            # no match => nothing was dispatched
+for e in .babel/<task>/results/*.err; do                 # every shape, not just -r<N>: design,
+  # stuck-<n> and checkpoint dispatches are named differently and wait longest
   [ -e "$e" ] || { echo 'no .err files: no dispatch redirected stderr (§5)'; break; }
   d=$(sed -n 's/.*"deadline":\([0-9][0-9]*\).*/\1/p' "$e" | head -1)
   [ -n "$d" ] || { echo "$e: no BABEL_DEADLINE — the shim never started"; continue; }
@@ -183,7 +184,7 @@ for e in .babel/<task>/results/*-r<N>.err; do            # no match => nothing w
 done
 ```
 
-A channel this prints is dead for the round; one it does not print is either answered or still inside its bound, and waiting is correct. **Ceiling**: this is a check, not a timer. Nothing wakes a lead that never runs it, so it converts "notice that time passed" — which the lead cannot do — into "read a file", which it already does every round for the receipt. The empty-glob branch matters as much as the timing one: a template that redirected only stdout produces no `.err` at all, and the loop would otherwise iterate once over a literal `*-r<N>.err` and report nothing wrong. Verify the block with `sh skills/babel/tests/deadline-check.sh`, which extracts it from this file rather than copying it.
+A channel this prints is dead for the round; one it does not print is either answered or still inside its bound, and waiting is correct. **Ceiling**: this is a check, not a timer. Nothing wakes a lead that never runs it, so it converts "notice that time passed" — which the lead cannot do — into "read a file", which it already does every round for the receipt. The empty-glob branch matters as much as the timing one: a template that redirected only stdout produces no `.err` at all, and the loop would otherwise iterate once over a literal glob and report nothing wrong. The glob is every `.err` in the directory rather than the round's, because the acceptance files are the only ones named `-r<N>`: the design dispatch (`design-<channel>.err`), the diagnosis dispatch (`stuck-<n>-<channel>.err`) and the checkpoint one are named differently, and they are the calls that wait longest unattended — the lead dispatches design and leaves to write its own DesignPacket, and diagnosis runs at `--tier deep`. A round-scoped glob checks the two shapes least likely to wedge and none of the others. Verify the block with `sh skills/babel/tests/deadline-check.sh`, which extracts it from this file rather than copying it.
 - **But a barrier is mandatory at merge / fix / revision boundaries.** Parallel execution crossing these boundaries is prohibited (prevents verification against an old code version).
 - **Reviewers are mutually blind within the same round**: a reviewer does not receive other reviewers' findings within the same round (prevents acceptance-side orchestration collapse). The lead alone merges and cross-references.
 
