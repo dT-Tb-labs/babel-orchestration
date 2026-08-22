@@ -9,6 +9,9 @@ node_modules/
 .babel/
 .sol/
 
+# gate-selftest scratch root
+.gate-selftest-tmp/
+
 # OS
 .DS_Store
 Thumbs.db
