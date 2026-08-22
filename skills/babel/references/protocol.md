@@ -177,14 +177,36 @@ now=$(date +%s)
 for e in .babel/<task>/results/*.err; do                 # every shape, not just -r<N>: design,
   # stuck-<n> and checkpoint dispatches are named differently and wait longest
   [ -e "$e" ] || { echo 'no .err files: no dispatch redirected stderr (§5)'; break; }
+  stem=${e%.err}
+  [ -f "$stem.dead" ] && continue                        # already judged; see the ack rule below
+  [ -s "$stem.raw" ] && continue                         # it answered; nothing to judge here
   d=$(sed -n 's/.*"deadline":\([0-9][0-9]*\).*/\1/p' "$e" | head -1)
-  [ -n "$d" ] || { echo "$e: no BABEL_DEADLINE — the shim never started"; continue; }
-  [ -s "${e%.err}.raw" ] && continue                     # it answered; nothing to judge here
-  [ "$now" -gt "$d" ] && echo "${e%.err}: $((now - d))s past its own bound — wedged shim (TaskStop, then §10 dead)"
+  [ -n "$d" ] || { echo "$stem: no BABEL_DEADLINE — the shim never started"; continue; }
+  [ $((d - now)) -gt 1800 ] &&
+    echo "$stem: claims a bound $((  (d - now) / 60 ))min out — a cap this large is not a bound, check the caller"
+  [ "$now" -gt "$d" ] || continue                        # inside its bound; waiting is correct
+  p=$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$e" | head -1)
+  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+    echo "$stem: $((now - d))s past its bound, pid $p still alive — wedged shim (TaskStop/kill, then §10 dead)"
+  else
+    echo "$stem: $((now - d))s past its bound, no live process — the job is gone and wrote nothing (§10 dead)"
+  fi
 done
 ```
 
-A channel this prints is dead for the round; one it does not print is either answered or still inside its bound, and waiting is correct. **Ceiling**: this is a check, not a timer. Nothing wakes a lead that never runs it, so it converts "notice that time passed" — which the lead cannot do — into "read a file", which it already does every round for the receipt. The empty-glob branch matters as much as the timing one: a template that redirected only stdout produces no `.err` at all, and the loop would otherwise iterate once over a literal glob and report nothing wrong. The glob is every `.err` in the directory rather than the round's, because the acceptance files are the only ones named `-r<N>`: the design dispatch (`design-<channel>.err`), the diagnosis dispatch (`stuck-<n>-<channel>.err`) and the checkpoint one are named differently, and they are the calls that wait longest unattended — the lead dispatches design and leaves to write its own DesignPacket, and diagnosis runs at `--tier deep`. A round-scoped glob checks the two shapes least likely to wedge and none of the others. Verify the block with `sh skills/babel/tests/deadline-check.sh`, which extracts it from this file rather than copying it.
+A channel this prints is dead for the round; one it does not print is either answered or still inside its bound, and waiting is correct.
+
+**Judging a channel dead is an event, so record it**: `: > results/<stem>.dead` at the moment the §10 row is taken. Without that the check is level-triggered over a directory that only grows — an expired `.err` beside an empty `.raw` stays expired forever, so every later run of the check re-reports a channel that was dealt with rounds ago, and a lead that has learned to scroll past four stale lines is a lead that will scroll past the fifth one that is new.
+
+**Waiting is only correct if something will end the wait.** A channel inside its bound sends a completion notification when it finishes — unless the shim itself is what wedged, which is the case this whole rule exists for, and which produces no notification and no barrier. Re-running the check at the next barrier does not help: barriers are reached by finishing work, and the work is what is missing. So **when the lead has no remaining work of its own and would otherwise idle on a notification, it dispatches one more background job — a watchdog whose only content is the wait and this check**:
+
+```bash
+# background, alongside the channels; its own completion notification is the wake
+sh -c 'sleep <the largest cap_s among this round\'s dispatches, plus 30>
+       <the check above>' > .babel/<task>/results/watchdog-r<N>.out 2>&1
+```
+
+It costs one job per round and needs nothing the harness does not already do: the notification that a wedged channel cannot send, an ordinary `sleep` can. Dispatch it **after** the lead's own work is written, never before — a watchdog launched at dispatch time is a barrier the anchoring rule (patterns.md step 2) does not want. **Ceilings**, all three load-bearing. *It is a check, not a timer*: the watchdog above is what wakes it, and a lead that skips the watchdog is back to idling. *The bound is self-reported by the component whose failure it detects* — `cap_s` comes from the shim, so a shim that lies, or a caller that sets an absurd `AGY_PRINT_TIMEOUT`, moves its own deadline; the `pid` check is the only part that observes rather than infers, which is why a dead process with no output is reported differently from a live one past its bound. *Elapsed wall time is not causation*: a suspended laptop, an NTP step, or a host whose clock differs from the one that wrote the marker all produce an expiry that no shim caused. `kill -0` distinguishes the two cases that matter — a live wedged process from a job that vanished — and nothing here distinguishes a wedge from a machine that slept through the bound. Re-run rather than trusting a single expiry seen after a resume. There is also a window before the marker exists at all: both shims write it before any slow work, so it is small, but a shim that dies in its own loader leaves an `.err` the missing-marker branch can only call "never started", with no time bound of its own. The empty-glob branch matters as much as the timing one: a template that redirected only stdout produces no `.err` at all, and the loop would otherwise iterate once over a literal glob and report nothing wrong. The glob is every `.err` in the directory rather than the round's, because the acceptance files are the only ones named `-r<N>`: the design dispatch (`design-<channel>.err`), the diagnosis dispatch (`stuck-<n>-<channel>.err`) and the checkpoint one are named differently, and they are the calls that wait longest unattended — the lead dispatches design and leaves to write its own DesignPacket, and diagnosis runs at `--tier deep`. A round-scoped glob checks the two shapes least likely to wedge and none of the others. Verify the block with `sh skills/babel/tests/deadline-check.sh`, which extracts it from this file rather than copying it.
 - **But a barrier is mandatory at merge / fix / revision boundaries.** Parallel execution crossing these boundaries is prohibited (prevents verification against an old code version).
 - **Reviewers are mutually blind within the same round**: a reviewer does not receive other reviewers' findings within the same round (prevents acceptance-side orchestration collapse). The lead alone merges and cross-references.
 
@@ -210,7 +232,9 @@ SKILL.md points here. A failure = a channel failure; drop the relevant track and
 | **channel silent while others confirm** (`emitted:0` on a round another channel earned a grounded `confirmed` over the same scope, twice) | drop it for the task under A9's silence rule — a channel that returns nothing forever accumulates neither `confirmed` nor `refuted`, so the false-positive drop rule alone never reaches it (`advanced.md` §A9) |
 | external 429 / quota exceeded | switch to a degraded config with the relevant track dropped, explicit. SOL call count is recorded in `state.json` |
 | review loop diverges | cut off at the caps patterns.md defines — user approval on the consumed-budget trigger or at round 5, hard stop at `round` = 8, which difficulty never extends — then present residual findings to the user and ask for an acceptance decision |
-| background call silent past its shim's bound (~9 min SOL / the agy budget, §8) | `TaskStop` the job, then take that channel's "dead" row above. Never wait past the bound: a background job has no harness timeout, so nothing else will end it |
+| background call silent past its shim's bound (~9 min SOL / the agy budget, §8) | `TaskStop` the job, write `results/<stem>.dead`, then take that channel's "dead" row above. Never wait past the bound: a background job has no harness timeout, so nothing else will end it |
+
+**Every "dead" row above is scoped to the round, not to the task.** A wedged shim, an expired auth, a 429 — these are transient by nature, and the schema-failure row is the only one that ever said so out loud ("recover next round"). Read without that scope, one 9-minute wedge in round 3 of an eight-round task removes a channel for rounds 4 through 8 and the acceptance report still calls the later rounds covered. So: **re-dispatch a dead channel on the next round**, and drop it for the task only under A9's silence rule or an explicit user decision. A channel that dies twice in a row on the same cause is a channel to raise with the user, not to quietly delete. The one row that is already bounded stays bounded (`SOL_STILL_RUNNING`: at most 2 attach attempts).
 
 ## 11. De-duplicating instruction re-sends
 
