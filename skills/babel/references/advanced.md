@@ -130,12 +130,21 @@ arbitration to the domain-strongest model instead of deciding itself: algorithmi
 → SOL, broad-knowledge/API-spec → agy, code-design/context → lead. Send the arbiter
 **only the differences**, never the agreed parts.
 
-## A5. completeness critic (L acceptance)
+## A5. completeness critic (M and L acceptance)
 
 A final agent asking one fixed question: "what dimension is uncovered, what claim
-unverified, what file unread?" What it surfaces seeds the next round. L-only, and
-it runs after **every** candidate clean round — including a clean round 1, where
-an uncovered dimension is the likeliest explanation for finding nothing.
+unverified, what file unread?" What it surfaces seeds the next round. It runs
+after **every** candidate clean round — including a clean round 1, where an
+uncovered dimension is the likeliest explanation for finding nothing.
+
+**M and L, not L-only.** It was L-only on the assumption that its cost belonged
+with the largest tasks. Measured on the run that produced this paragraph, the
+assumption was backwards: one critic at ~95k tokens found that a whole deliverable
+was inert as documented, while four in-scope delta rounds spent ~500k between them
+on findings that all lived inside a single bullet of one file. The critic asks
+about the changeset; a delta round asks about the previous round's fixes, and by
+round four that is a question about a paragraph. Cost is the reason it stays off
+at S: with one reviewer there is no merged pool for it to read.
 
 Run it as one Opus agent (`effort: 'high'`), given the changeset diff path, the
 spec path, the round's merged findings, and the list of dimensions/reviewers that
