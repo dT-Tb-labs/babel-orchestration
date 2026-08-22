@@ -263,7 +263,9 @@ AGY_PRINT_TIMEOUT=240s agyask "$(cat .babel/<task>/inbox/agy-r<N>.txt)"
    # Never a hardcoded channel list: a failed-receipt track contributed no reviewed
    # bytes (step 0) and a routing-skipped one was never dispatched, and either one
    # entering the pool is a finding merged from a channel that reviewed nothing.
-   PASSED="sol agy a"
+   # Set by step 0, above. Not a default: an unset PASSED must stop the merge, not
+   # quietly become a full channel list that pulls in whatever result files exist.
+   : "${PASSED:?step 0 must set PASSED to the receipt-passing channels for this round}"
    : > $R/r<N>-srcmap.txt
    i=0; for ch in $(printf '%s\n' $PASSED | sort -R); do
      f=$R/$ch-r<N>.jsonl                     # the per-agent results file (protocol.md §5)
