@@ -26,7 +26,7 @@ Used in Phase 1 (design). Run only when triage classifies the task as M/L. For S
 Write the payload to `.babel/<task>/inbox/design-req.json` and have SOL read it via `--cwd` (protocol.md §3, to avoid the argv limit). Do not use protocol.md pointers with SOL; embed the output format inline each time (protocol.md §11).
 
 ```bash
-solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON." > .babel/<task>/results/design-sol.raw
+solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON." > .babel/<task>/results/design-sol.raw 2> .babel/<task>/results/design-sol.err
 ```
 
 - `--tier normal` (normal for design, deep for diagnosis/critical acceptance).
@@ -45,7 +45,7 @@ Output DesignPacket JSON only, no prose. Do not use any tools — answer directl
 
 ```bash
 [ "$(wc -c < .babel/<task>/inbox/agy-design.txt)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
-AGY_PRINT_TIMEOUT=180s agyask "$(cat .babel/<task>/inbox/agy-design.txt)" > .babel/<task>/results/design-agy.raw
+AGY_PRINT_TIMEOUT=180s agyask "$(cat .babel/<task>/inbox/agy-design.txt)" > .babel/<task>/results/design-agy.raw 2> .babel/<task>/results/design-agy.err
 ```
 
 Bash `timeout: 200000` applies only if run in the foreground; backgrounded, the bound is `AGY_PRINT_TIMEOUT` enforced by the agyask watchdog (protocol.md §8).
@@ -223,7 +223,7 @@ Run correctness / security / edge-cases / spec-compliance through `pipeline()` i
  "criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
 ```
 ```bash
-solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. First line of your answer is the receipt: {\"receipt\":{\"tokens\":[\"<the value on the babel-receipt-token-a line, somewhere in the first quarter of the diff>\",\"<the value on the babel-receipt-token-b line, the diff's last line>\"],\"paths\":[\"<files you actually read>\"],\"dimensions\":[\"correctness\",\"security\",\"edge-cases\",\"spec-compliance\"],\"unread\":[\"<dispatched paths you did not read>\"]}}. Then output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) after the receipt line if clean — the receipt is required either way. No prose."
+solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. First line of your answer is the receipt: {\"receipt\":{\"tokens\":[\"<the value on the babel-receipt-token-a line, somewhere in the first quarter of the diff>\",\"<the value on the babel-receipt-token-b line, the diff's last line>\"],\"paths\":[\"<files you actually read>\"],\"dimensions\":[\"correctness\",\"security\",\"edge-cases\",\"spec-compliance\"],\"unread\":[\"<dispatched paths you did not read>\"]}}. Then output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) after the receipt line if clean — the receipt is required either way. No prose." > .babel/<task>/results/sol-r<N>.raw 2> .babel/<task>/results/sol-r<N>.err
 ```
 `run_in_background: true` (bound = solask's ~9 min cap, not the Bash `timeout: 600000`; protocol.md §8). For critical acceptance of a security/irreversible L task, swap in `--tier deep` (see the cost discipline in SKILL.md).
 
@@ -249,9 +249,9 @@ then dispatch it:
 
 ```bash
 [ "$(wc -c < .babel/<task>/inbox/agy-r<N>.txt)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
-AGY_PRINT_TIMEOUT=240s agyask "$(cat .babel/<task>/inbox/agy-r<N>.txt)"
+AGY_PRINT_TIMEOUT=240s agyask "$(cat .babel/<task>/inbox/agy-r<N>.txt)" > .babel/<task>/results/agy-r<N>.raw 2> .babel/<task>/results/agy-r<N>.err
 ```
-`run_in_background: true` with `AGY_PRINT_TIMEOUT=240s` — a whole-changeset review is heavier than a design request, so agy's budget is intentionally extended. That env var is the real bound; the Bash `timeout: 300000` only applies in the foreground (protocol.md §8).
+`run_in_background: true` with `AGY_PRINT_TIMEOUT=240s` — a whole-changeset review is heavier than a design request, so agy's budget is intentionally extended. **Both streams are redirected in every template above.** stdout is the findings channel and stderr carries the one `BABEL_USAGE` line the scoreboard's `tokens` field is filled from (protocol.md §5); a template that redirects only stdout leaves that field `null` on a shim that is working, which is indistinguishable downstream from no instrumentation at all. That env var is the real bound; the Bash `timeout: 300000` only applies in the foreground (protocol.md §8).
 
 ### Merge procedure
 
@@ -278,7 +278,7 @@ AGY_PRINT_TIMEOUT=240s agyask "$(cat .babel/<task>/inbox/agy-r<N>.txt)"
      awk -v s="X$i" '/^\[/{print s"\t"$0}' "$f"
    done | sort -R > $R/r<N>-pool.jsonl
    ```
-   The pool is `X<i><TAB><finding-json>` per line; split on the first TAB to parse. Read `pool.jsonl` for steps 1–2 and for the protocol.md §4 severity re-assignment; do not open `srcmap.txt` until step 3. `reporters` is still computable here — it is the count of distinct `X` ids in the dedup class — so nothing A9 needs is lost by waiting. At **S** this is skipped: one reviewer, nothing to delay.
+   The pool is `X<i><TAB><finding-json>` per line; split on the first TAB to parse. **Measured**: this block was run over a three-channel fixture (two channels with findings, one clean) under both `/bin/sh` and `dash` — receipt lines and the bare `NONE` are dropped, tags are TAB-separated, `srcmap.txt` is written in shuffle order, the shuffle differs between runs, and an unset `PASSED` stops the merge with a non-zero status. A channel that passed its receipt but reported nothing still takes an `X` id in `srcmap.txt` and contributes no pool line; that is a gap in the id sequence, not a defect. Read `pool.jsonl` for steps 1–2 and for the protocol.md §4 severity re-assignment; do not open `srcmap.txt` until step 3. `reporters` is still computable here — it is the count of distinct `X` ids in the dedup class — so nothing A9 needs is lost by waiting. At **S** this is skipped: one reviewer, nothing to delay.
    **This only works if every track lands in a file.** An in-Claude reviewer's answer returns as the agent's own result and arrives in the lead's context already labelled with which agent produced it — there is no delaying that after the fact. So instruct in-Claude reviewers to **write** their receipt and finding lines to `$R/<agent>-r<N>.jsonl` and return only a one-word completion marker. A round that skipped this has a source-delayed pool over its externals and an attributed (a) track, which is worth saying in the acceptance report rather than describing the round as delayed.
    **What this is and is not.** It is *source delay*, not anonymity. The lead runs the shuffle itself, so nothing physically stops it from reading the mapping; what changes is that doing so is a deliberate extra action that leaves a trace, the same standing the grounding record's own ceiling has (protocol.md §7). It is also defeated by style — a channel's phrasing is often recognisable, so the label goes and the tell does not. And the motivation is N=1: on one instrumented run agy under-declared severity twice against SOL on the same defects (H→M, M→L). Cheap enough to keep at that evidence level; not strong enough to describe as blinding.
    Check that this is wired correctly rather than merely written down: run a merge over a fixed two-channel fixture, then swap the two channels' mappings and re-run. The post-step-2 severities and fingerprints must be identical across both runs, and the restored `reporters` attribution must follow the swap.

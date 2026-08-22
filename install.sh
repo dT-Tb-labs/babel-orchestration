@@ -273,7 +273,9 @@ PYEOF
       # tokens: null — documented graceful degradation, not a failure, so asserting
       # the JSON contract there would fail an install that is working as designed.
       if [ -x "$HOME/.local/share/babel/agy-venv/bin/python3" ] || [ -x "$HOME/.local/share/babel/agy-venv/Scripts/python.exe" ]; then
-      _stub="$BIN/.agyask-stub.$$"
+      # Not in $BIN: that directory is on the user's PATH, and an install that
+      # aborts between here and the rm below would leave an executable behind in it.
+      _stub="$DEST/.agyask-stub.$$"
       cat > "$_stub" <<'STUB'
 #!/bin/sh
 case "$STUB_CASE" in
