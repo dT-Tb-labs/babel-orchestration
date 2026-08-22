@@ -372,7 +372,7 @@ function main() {
   // too. Same line shape as agyask, stdout untouched.
   process.stderr.write(
     `BABEL_DEADLINE {"provider":"sol","cap_s":${Math.round(WALL_CAP_MS / 1000)},` +
-    `"deadline":${Math.round((START_WALL + WALL_CAP_MS) / 1000)}}\n`);
+    `"deadline":${Math.round((START_WALL + WALL_CAP_MS) / 1000)},"pid":${process.pid}}\n`);
 
   let jobId;
   if (o.attach) {

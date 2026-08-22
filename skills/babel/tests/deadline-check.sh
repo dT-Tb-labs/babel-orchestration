@@ -55,7 +55,7 @@ expect '' 'unanswered, inside bound'
 
 # 5. no answer, past its bound — the wedge this check exists for
 printf 'BABEL_DEADLINE {"provider":"sol","cap_s":540,"deadline":%s}\n' "$past" > "$R/sol-r1.err"
-expect 'past its own bound' 'unanswered, past bound'
+expect 'past its bound' 'unanswered, past bound'
 
 # 6. .err exists but carries no deadline: the shim never started
 printf 'some unrelated stderr noise\n' > "$R/sol-r1.err"
@@ -65,15 +65,36 @@ expect 'no BABEL_DEADLINE' 'err without a deadline line'
 rm -f "$R"/sol-r1.*
 printf 'BABEL_DEADLINE {"provider":"agy","cap_s":300,"deadline":%s}\n' "$past" > "$R/agy-r1.err"
 : > "$R/agy-r1.raw"
-expect 'past its own bound' 'agy line shape'
+expect 'past its bound' 'agy line shape'
 
-# 8. the dispatch shapes that carry no -r<N>: design, diagnosis, checkpoint.
+# 8. an acknowledged death goes quiet: the check is level-triggered over a
+#    directory that only grows, so without .dead every later run re-reports it.
+rm -f "$R"/*.err "$R"/*.raw "$R"/*.dead
+printf 'BABEL_DEADLINE {"provider":"sol","cap_s":540,"deadline":%s,"pid":1}\n' "$past" > "$R/sol-r1.err"
+: > "$R/sol-r1.raw"
+expect 'past its bound' 'unacknowledged death still reported'
+: > "$R/sol-r1.dead"
+expect '' 'acknowledged death goes quiet'
+rm -f "$R"/*.dead
+
+# 9. pid liveness separates a live wedged process from a job that vanished.
+printf 'BABEL_DEADLINE {"provider":"sol","cap_s":540,"deadline":%s,"pid":%s}\n' "$past" "$$" > "$R/sol-r1.err"
+expect 'still alive' 'live pid past its bound'
+printf 'BABEL_DEADLINE {"provider":"sol","cap_s":540,"deadline":%s,"pid":999999}\n' "$past" > "$R/sol-r1.err"
+expect 'no live process' 'dead pid past its bound'
+
+# 10. an absurd cap is flagged while still inside its bound: a bound that large
+#     is not a bound, and it is the one knob a caller can turn to hide a wedge.
+printf 'BABEL_DEADLINE {"provider":"agy","cap_s":36000,"deadline":%s,"pid":1}\n' "$((now + 35000))" > "$R/sol-r1.err"
+expect 'is not a bound' 'absurd cap flagged'
+
+# 11. the dispatch shapes that carry no -r<N>: design, diagnosis, checkpoint.
 #    These wait longest unattended, and a round-scoped glob misses every one.
 for stem in design-sol design-agy stuck-2-sol stuck-2-agy checkpoint-r1-sol; do
   rm -f "$R"/*.err "$R"/*.raw
   printf 'BABEL_DEADLINE {"provider":"sol","cap_s":540,"deadline":%s}\n' "$past" > "$R/$stem.err"
   : > "$R/$stem.raw"
-  expect 'past its own bound' "wedged $stem"
+  expect 'past its bound' "wedged $stem"
 done
 
 [ "$fails" -eq 0 ] && { echo "deadline-check: PASS"; exit 0; }

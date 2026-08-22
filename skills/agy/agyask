@@ -55,8 +55,8 @@ fi
 # read. A lead waiting on a background job has no clock and gets no notification
 # from a wedged shim, so "past its bound" is a condition it can otherwise never
 # evaluate (protocol.md §8). stdout stays the findings channel, untouched.
-printf 'BABEL_DEADLINE {"provider":"agy","cap_s":%s,"deadline":%s}\n' \
-  "$budget_secs" "$(( $(date +%s) + budget_secs ))" >&2
+printf 'BABEL_DEADLINE {"provider":"agy","cap_s":%s,"deadline":%s,"pid":%s}\n' \
+  "$budget_secs" "$(( $(date +%s) + budget_secs ))" "$$" >&2
 
 # Print/headless agy aborts the entire run when a tool needs a permission it
 # cannot prompt for ("no output produced — a tool required the <x> permission
