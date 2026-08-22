@@ -94,7 +94,9 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
   # where it left off, so sharing one handler across all three meant a signal
   # released the lock and then let the install carry on copying unlocked — with a
   # second installer free to start on top of it.
-  _unlock() { [ "$(cat "$LOCK/pid" 2>/dev/null || echo "")" = "$$" ] && rm -rf "$LOCK" 2>/dev/null; : ; }
+  # Also drops the self-check stub: it is created much later, and INT between its
+  # chmod and its rm would otherwise leave an executable behind for good.
+  _unlock() { [ "$(cat "$LOCK/pid" 2>/dev/null || echo "")" = "$$" ] && rm -rf "$LOCK" 2>/dev/null; rm -f "${_stub:-}" 2>/dev/null; : ; }
   trap '_unlock' EXIT
   trap '_unlock; exit 130' INT
   trap '_unlock; exit 143' TERM

@@ -22,10 +22,11 @@ grep -q '^reject() {' "$BLOCK" || { echo "FAIL: block calls reject but never def
 grep -q '^ROOT=' "$BLOCK"      || { echo "FAIL: block compares against ROOT but never sets it"; exit 1; }
 grep -v '^gate "\$path"' "$BLOCK" > "$BLOCK.src"
 sh -n "$BLOCK.src" || { echo "FAIL: extracted block is not valid sh"; exit 1; }
-# The block must derive ROOT itself. Sourcing it here and comparing would also
-# accept `ROOT=$REPO`, which works only because this test happens to define REPO;
-# run it in a fresh sh that has none of the test's variables instead.
-blockroot=$(sh -c '. "$1" >/dev/null 2>&1; printf %s "${ROOT-}"' _ "$BLOCK.src")
+# The block must derive ROOT itself. Sourcing it here and comparing would accept
+# `ROOT=$REPO`, which works only because this test defines REPO; running it in the
+# repo root would accept `ROOT=$PWD`, which is wrong from any subdirectory. So:
+# a fresh sh, none of this test's variables, and a cwd that is not the root.
+blockroot=$(cd "$REPO/skills" && sh -c '. "$1" >/dev/null 2>&1; printf %s "${ROOT-}"' _ "$BLOCK.src")
 [ "$blockroot" = "$REPO" ] ||
   { echo "FAIL: block set ROOT to '$blockroot' on its own, expected '$REPO'"; exit 1; }
 . "$BLOCK.src"

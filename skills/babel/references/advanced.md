@@ -74,7 +74,7 @@ pilot has hit this yet.)
 2. Write it to `.babel/<task>/inbox/stuck-<n>.json` (argv-avoidance, protocol §3).
 3. Hand to SOL deep:
    ```bash
-   solask --tier deep --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/stuck-<n>.json. 2 consecutive fix attempts failed on the same issue. Diagnose root cause. Output diagnosis JSON only: {diagnosis:str, proposed_fix:str, confidence:high|med|low}. Example: {\"diagnosis\":\"race between timer and callback\",\"proposed_fix\":\"guard with generation counter\",\"confidence\":\"high\"}. No prose."
+   solask --tier deep --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/stuck-<n>.json. 2 consecutive fix attempts failed on the same issue. Diagnose root cause. Output diagnosis JSON only: {diagnosis:str, proposed_fix:str, confidence:high|med|low}. Example: {\"diagnosis\":\"race between timer and callback\",\"proposed_fix\":\"guard with generation counter\",\"confidence\":\"high\"}. No prose." > .babel/<task>/results/stuck-<n>-sol.raw 2> .babel/<task>/results/stuck-<n>-sol.err
    ```
    Deep runs 5-6 min, inside solask's ~9 min cap (protocol.md §8). **deep cap = 2 per task** (ask the user past that).
 4. If SOL's diagnosis doesn't resolve it, switch to agy (inline the same context —
@@ -91,7 +91,7 @@ pilot has hit this yet.)
 
    ```bash
    [ "$(wc -c < .babel/<task>/inbox/agy-stuck-<n>.txt)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
-   AGY_PRINT_TIMEOUT=180s agyask "$(cat .babel/<task>/inbox/agy-stuck-<n>.txt)"
+   AGY_PRINT_TIMEOUT=180s agyask "$(cat .babel/<task>/inbox/agy-stuck-<n>.txt)" > .babel/<task>/results/stuck-<n>-agy.raw 2> .babel/<task>/results/stuck-<n>-agy.err
    ```
    Bound = `AGY_PRINT_TIMEOUT` (protocol.md §8).
 5. If agy misses too, the lead does one max-depth rethink (ultrathink) — line up
@@ -119,7 +119,7 @@ git diff <previous milestone ref> > .babel/<task>/inbox/checkpoint-r<N>.diff
 written to `.babel/<task>/inbox/checkpoint-r<N>.json`, then:
 
 ```bash
-solask --tier quick --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/checkpoint-r<N>.json. Read that file and the referenced diff. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose."
+solask --tier quick --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/checkpoint-r<N>.json. Read that file and the referenced diff. Output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) if clean. No prose." > .babel/<task>/results/checkpoint-r<N>-sol.raw 2> .babel/<task>/results/checkpoint-r<N>-sol.err
 ```
 Fix C/H before the next milestone; record M/L for the final acceptance pass.
 
