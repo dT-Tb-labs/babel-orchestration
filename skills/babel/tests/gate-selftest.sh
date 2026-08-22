@@ -4,11 +4,13 @@
 # never copies it, so a block that stops being valid sh fails here.
 set -u
 
-ROOT=$(git rev-parse --show-toplevel) || exit 1
-DOC=$ROOT/skills/babel/references/protocol.md
-TMP=$ROOT/.gate-selftest-tmp
+REPO=$(git rev-parse --show-toplevel) || exit 1
+DOC=$REPO/skills/babel/references/protocol.md
+TMP=$REPO/.gate-selftest-tmp
+# mkdir, not rm -rf then mkdir: the scratch path is fixed, and a test must not
+# delete a directory it did not create. The trap is armed only once it owns one.
+mkdir "$TMP" || { echo "FAIL: $TMP already exists — remove it yourself and re-run"; exit 1; }
 trap 'rm -rf "$TMP"' EXIT
-rm -rf "$TMP" && mkdir -p "$TMP" || exit 1
 BLOCK=$TMP/block.sh
 
 # the fenced bash block that defines gate(), minus its trailing invocation
@@ -20,7 +22,11 @@ grep -q '^reject() {' "$BLOCK" || { echo "FAIL: block calls reject but never def
 grep -q '^ROOT=' "$BLOCK"      || { echo "FAIL: block compares against ROOT but never sets it"; exit 1; }
 grep -v '^gate "\$path"' "$BLOCK" > "$BLOCK.src"
 sh -n "$BLOCK.src" || { echo "FAIL: extracted block is not valid sh"; exit 1; }
+ROOT=
 . "$BLOCK.src"
+# the block must set ROOT to the repo root itself; the fixture root below
+# overwrites it, so this is the only place a wrong ROOT= line is observable.
+[ "$ROOT" = "$REPO" ] || { echo "FAIL: block set ROOT to '$ROOT', expected '$REPO'"; exit 1; }
 
 # a throwaway root, so every banned path below is a file that really exists:
 # a gate that rejects only because the file is missing has not been tested.
@@ -29,7 +35,7 @@ cd "$TMP/repo" || exit 1
 ROOT=$PWD
 for f in .env .env.local server.pem server.key id_rsa id_ed25519 \
          .ssh/config .aws/credentials my_secret.md api_token.json db_password.txt \
-         'version..js' plain.txt sub/id_rsa sub/deep.txt; do
+         'version..js' plain.txt sub/id_rsa sub/deep.txt valid_id_rsa_parser.c; do
   : > "$f"
 done
 ln -sf /etc/passwd link.txt
@@ -63,6 +69,7 @@ deny does-not-exist.txt
 allow plain.txt
 allow sub/deep.txt
 allow 'version..js'              # a double dot is not a traversal component
+allow valid_id_rsa_parser.c      # §7 bans the filename id_rsa, not the substring
 
 [ "$fails" -eq 0 ] && { echo "gate-selftest: PASS"; exit 0; }
 echo "gate-selftest: $fails FAILURE(S)"; exit 1
