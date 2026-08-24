@@ -30,7 +30,7 @@ The word collides three ways, and picking the wrong one wastes the whole task:
 
 1. **Measurable.** The goal reduces to a number or a pass/fail predicate that a command *emits*. Not "make it faster" — `pytest tests/bench.py -q` printing a millisecond figure the lead can parse with a stated expression.
 2. **Automatable.** That command runs unattended, hermetically, in bounded wall-clock, with no network flake and no human in the middle. State the measured per-run seconds; an oracle nobody has timed is an oracle nobody has run.
-3. **Affordable.** `oracle_seconds × candidates_per_iteration × expected_iterations` fits the budget stated at the crew proposal, with the oracle cost counted *three times over* — the cascade (§L2) runs it on every candidate from every channel.
+3. **Affordable.** `oracle_seconds × (channels + 1) × expected_iterations` fits the budget stated at the crew proposal — one full run per surviving candidate, plus the leader's confirmation run (§L4 step 6). The `+1` is the part that gets forgotten, and the per-channel multiplier is the part that gets halved: the cascade runs on every candidate from every channel, not once per iteration.
 4. **Search, not specification.** The reason this is not already done is that nobody knows *which* change wins — not that nobody has said *what* is wanted.
 
 **Predicate 4 is the one that actually gets skipped, and skipping it is the expensive error.** A task where 1-3 hold and 4 fails is an ordinary `linear` task that happens to own a good test suite. Looping on it buys nothing: iteration 1 produces the change the lead would have written anyway, and iterations 2..N pay full oracle cost to confirm it. Say "this has an oracle but no search — running it linear" in the crew proposal and route `linear`. The symptom to watch for is a user who can already describe the fix; if they can, there is nothing to search.
@@ -41,7 +41,7 @@ If 4 holds but 1 or 2 fails, **do not fabricate an oracle to unlock the route.**
 
 ## L1. The loop charter — eliciting the goal before spending anything
 
-A loop with an underspecified goal does not fail; it succeeds at the wrong thing for its entire budget. So the charter is a **user gate** — the fifth, alongside the four in `protocol.md` §0 — and it fires before iteration 0, at every scale, on every `loop`-routed task.
+A loop with an underspecified goal does not fail; it succeeds at the wrong thing for its entire budget. So the charter is a **user gate** — the fifth, alongside the four in `protocol.md` §0 — and it fires at iteration 0 — before the baseline is measured and before anything is spent — at every scale, on every `loop`-routed task.
 
 ### How to ask (this is most of the quality)
 
@@ -69,9 +69,11 @@ And three the lead may draft and have confirmed rather than asked cold: `budget`
 
 ## L2. The oracle contract
 
+**Iteration numbering, fixed here and used everywhere in this file.** **Iteration 0 is setup and produces no candidate**: the charter is approved (§L1), the frozen manifest is recorded, and both the proxy and held-out oracles read their baselines. **Iterations 1..N are candidate rounds.** Everything counted — the stall counter, the re-approval trigger at iteration 5, the ceiling of 12 — counts candidate rounds, so iteration 0 is never one of them. A file that says "before iteration 0" and "before iteration 1" for the same moment leaves the lead to guess whether setup was free, and it is not.
+
 ### Baseline, and noise
 
-**Run the oracle twice on the untouched tree before iteration 1.** Record both readings. `spread` = the difference.
+**Run the oracle twice on the untouched tree, at iteration 0.** Record both readings. `spread` = the difference.
 
 This is not ceremony. Every subsequent "improvement" is a comparison against the baseline, and an improvement smaller than `spread` is not an improvement — it is the same measurement taken twice. Without a recorded spread, the loop's stall detector cannot fire (the score keeps "moving"), the winner selection promotes noise, and the final report claims a gain the user cannot reproduce. A loop that skipped this reports a number it has no right to.
 
@@ -89,11 +91,13 @@ Most candidates are wrong, and the full oracle is the expensive way to learn it.
 
 Record which stage each candidate died at. That distribution is diagnostic on its own: everything dying at stage 1 means the context packet is stale, everything at stage 3 means the channels are not being told how the project builds.
 
+**What `budget.oracle_runs` counts, so the ceiling means something**: every execution of the **full** oracle (stage 5), every **confirmation** run (§L4 step 6), and the two **held-out** runs. Stages 1-4 are not counted — they are the cheap gates whose whole purpose is to be run freely — but stage 4's per-run seconds still go into the §L0 predicate-3 estimate, because "not counted" and "not paid for" are different things. Budget it at roughly `channels + 1` full runs per iteration: one per surviving candidate, plus the leader's confirmation run.
+
 ### The frozen set — enforced mechanically, never by prompting
 
 The oracle, its inputs, and the tests are the only reason any score means anything. A candidate that edits them has not improved the code; it has moved the finish line. Telling the channels not to do that is not a control — a control is a check that runs whether or not anyone complied.
 
-Record the manifest at iteration 0, **outside** any tree a candidate is applied in — a manifest stored where the candidate can reach it is a record of the oracle that the candidate can edit to match:
+Record the manifest at iteration 0 (numbering above), **outside** any tree a candidate is applied in — a manifest stored where the candidate can reach it is a record of the oracle that the candidate can edit to match:
 
 ```bash
 FROZEN=$BABEL/frozen.manifest   # $BABEL = .babel/<task>, never inside the candidate worktree
@@ -167,19 +171,27 @@ This is where the multi-model crew earns its cost, and it earns it differently t
 
 Each iteration:
 
-1. **Build one context packet** (`LoopContext`, §L6) and send the *same* packet to every channel: the charter, the current base tree pointer, the best-so-far patch **with its score**, the last iteration's scores per channel, and the rejected-fingerprint list. Carrying the best patch and its number forward is what makes three channels compound instead of running three independent single-model loops — it is the prompt-sampler idea from AlphaEvolve (§L8), and it is the difference between an ensemble and three people guessing in separate rooms.
+1. **Build the context packet** (`LoopContext`, §L6). At iteration 1 it is one packet, identical for every channel: the charter, the current base tree pointer, the best-so-far patch **with its score**, the scores per channel, and the rejected-fingerprint list. From iteration 2 it is **one packet per channel**, sliced by that channel's cursor (next paragraph) — the *content* stays common knowledge, only the already-delivered part is dropped, so no channel is given anything a sibling was not. Carrying the best patch and its number forward is what makes three channels compound instead of running three independent single-model loops — it is the prompt-sampler idea from AlphaEvolve (§L8), and it is the difference between an ensemble and three people guessing in separate rooms.
 
    **From iteration 2 on, every channel gets a delta, not the packet again** — the same rule `advanced.md` §A1 already applies to stateless reviewers, and a loop is where it matters most: the generators are re-dispatched a dozen times, so re-sending the charter and the whole history each time pays for the same bytes twelve times over. Keep a per-channel cursor in `loop.cursors` (§L6) and send only what moved since that channel's `last_seen`: the winning diffs it has not seen, the score rows added since, and the fingerprints added since. The charter is sent **once**, at iteration 1 — it is fixed for the run by definition, and a channel that needs it re-stated has not been reading it.
 
    Two rules carry over from §A1 unchanged, and both are load-bearing here. Capture the snapshot **at dispatch** and commit it together with `last_seen` only once that channel's response clears the schema gate: a generator that times out or returns prose must not have its cursor advanced, or the next delta compares against a base it never saw and silently omits the winner it was supposed to build on. And a laggard channel — one that missed iterations — gets the union of the deltas it missed, not the latest one alone.
 
    Measured expectation, stated so it can be checked rather than assumed: iteration 1 is the expensive one (charter + base acquisition), and iterations 2..N should be a fraction of it per channel. **If they are not, the delta is not being built** — that is the symptom to look for in the per-iteration spend, and it is the single largest token lever in this file.
-2. **Generate blind and in parallel.** Claude (a Sonnet worker, or the lead at S), SOL at **`--tier normal`**, and agy each propose **one candidate diff** against the same base, without seeing the siblings' candidates for that iteration. **Never `deep` for loop generation**: the deep cap is 2 per task (`advanced.md` §A7) and a loop would consume it by iteration 3, spending on routine candidate generation the budget that exists for the one hard diagnosis. Deep belongs to the stuck playbook — if the loop stalls (§L5) and §A2 fires, that is where the task's deep calls are spent, once. Same anchoring rule as `#debate-aggregation` and the same-round blindness of `protocol.md` §8, and here it is load-bearing rather than hygienic: three candidates that saw each other are one candidate with three sets of edits.
+2. **Generate blind and in parallel.** Claude (a Sonnet worker, or the lead at S), SOL, and agy each propose **one candidate diff** against the same base, without seeing the siblings' candidates for that iteration. Same anchoring rule as `#debate-aggregation` and the same-round blindness of `protocol.md` §8 — and here it is load-bearing rather than hygienic: three candidates that saw each other are one candidate with three sets of edits, which is the failure the whole route is built to avoid.
+
+   **The blindness boundary is the iteration, and it binds the fold ladder's direction hints too.** Anything a sibling produced during iteration N — a candidate, a score, a direction-only hint — enters the others' packets at iteration N+1, never during N. A hint collected and injected inside the same iteration is exactly the leak the blindness rule exists to stop, and it is the easy one to introduce because a direction hint is cheap and arrives early.
+
+   **SOL runs at `--tier normal`. Never `deep` for loop generation**: the deep cap is 2 per task (`advanced.md` §A7) and a loop would consume it by iteration 3, spending on routine candidate generation the budget that exists for the one hard diagnosis. Deep belongs to the stuck playbook — if the loop stalls (§L5) and §A2 fires, that is where the task's deep calls are spent, once.
 3. **Isolate.** Candidates touch the same paths by construction, so apply each in its own worktree (`Workflow`'s `isolation: 'worktree'`, or `git worktree add` directly). This is the one place in babel where worktree isolation is not a luxury.
 4. **Reject on novelty before spending.** A candidate whose normalized diff fingerprint matches one already in `rejected[]` is dropped at zero oracle cost — the novelty-rejection idea from ShinkaEvolve (§L8), implemented on the fingerprint list `protocol.md` §5 already keeps. Normalize by stripping whitespace and comment-only lines before hashing; a re-proposal with a reworded comment is the same candidate.
 5. **Score through the cascade** (§L2). Ties inside `spread` are not ties to break on preference — prefer the **smaller diff**, stated as the rule rather than decided per case, because the alternative is the lead picking its own channel's candidate on a coin flip.
-6. **Promote and migrate.** The winner becomes the next iteration's base and its patch + score go into every channel's next context packet. Record the loser patches; they are the diversity the next iteration is drawing from, and deleting them is how a loop collapses onto one line of attack.
-7. **Score the channels, with the objective label.** Append the iteration to `channel_scoreboard` exactly as an acceptance round would (`protocol.md` §5), with a grounding record per candidate carrying **`method:"oracle"`** — `check` = the oracle command the lead ran, `result` = the measured delta against the base, `at` = the candidate patch path. This is a strict instance of §7's "the verifier executes, not opines", not a loosening of it: an oracle run is an executed command with a recorded result, which is what `repro` already means. It is *stronger* evidence than an acceptance round produces, because the verdict is a number nobody argued for.
+6. **Confirm before promoting, and do not promote inside the noise band.** Two rules, and skipping either is how a loop reports a gain it cannot reproduce:
+   - The leading candidate must beat the **current base** by more than `spread` (§L2). A candidate that does not is not a small win, it is an unmeasurable one: promoting it makes the base a random walk, and every later "improvement" is then measured against a base that drifted for free. The base stays and the iteration counts toward the stall counter.
+   - Then **re-run the full oracle on that one candidate** — the confirmation run. Promote only if the second reading also clears the base by more than `spread`. This costs one extra full-oracle run per iteration, on the leader only and never on the losers, and it is what supplies the re-run §L7's flaky-oracle rule already assumes exists: if the two readings of the *same* candidate disagree by more than `spread`, that is not a marginal candidate, it is a flaky oracle, and §L7 applies to the whole run.
+   Why both, given the baseline already ran twice: `spread` taken from two runs is the range of a two-sample draw, which under-estimates true variance rather than bounding it. Treat it as a **lower bound on noise, not a confidence interval** — the confirmation run is what compensates, and it is deliberately cheap because it is one run on one candidate.
+7. **Promote and migrate.** The winner becomes the next iteration's base and its patch + score go into every channel's next context packet. Record the loser patches; they are the diversity the next iteration is drawing from, and deleting them is how a loop collapses onto one line of attack.
+8. **Score the channels, with the objective label.** Append the iteration to `channel_scoreboard` exactly as an acceptance round would (`protocol.md` §5), with a grounding record per candidate carrying **`method:"oracle"`** — `check` = the oracle command the lead ran, `result` = the measured delta against the base, `at` = the candidate patch path. This is a strict instance of §7's "the verifier executes, not opines", not a loosening of it: an oracle run is an executed command with a recorded result, which is what `repro` already means. It is *stronger* evidence than an acceptance round produces, because the verdict is a number nobody argued for.
 
 That last point makes the existing bandit (`advanced.md` §A9) work here unchanged and better: a channel whose candidates never survive the cascade is folded on measured reward rather than on the lead's impression of it. Fire it under the same condition — **multi-iteration only**, ≥3 iterations expected; below that it is noise.
 
@@ -241,6 +253,16 @@ e.g. iter 3: {"base":"7c2e001","best":{"patch":"iters/i2-sol.diff","score":0.81}
 
 **`CandidateRecord`** is the lead's own row in `candidates[]` above; channels never write it.
 
+### Resuming a loop
+
+A loop is the longest-running thing babel does, so it is the most likely to be picked up in a new session — and the state above is enough to resume only if three things are re-established first, in this order:
+
+1. **Re-run `frozen_check` against the pristine tree** (§L2). The manifest describes a tree that may have moved while nobody was looking; resuming on a frozen set that has changed since it was recorded scores every remaining iteration against a different evaluator than the earlier ones. A mismatch here is not a candidate violation — nobody was iterating — but it does void the earlier scores, and that is a user gate, not a silent re-baseline.
+2. **Re-read the baseline, once, and compare to `loop.baseline`.** Machine, load and toolchain all differ across sessions. A reading outside `spread` means the recorded scores are not comparable with anything measured from here on: re-baseline and say that the earlier iterations' numbers are being retired, rather than continuing a series that changed units mid-way.
+3. **Discard every candidate worktree** and rebuild from `loop.best.base`. A worktree left by a killed session is an unknown tree, and the cheapest correct assumption is that it is not the one its name claims.
+
+`reapproved_at` then decides the gates: an iteration already listed there is not re-asked, and one that is due and missing is asked before the first dispatch of the resumed run. `candidates[]` carries over untouched — it is the record of what was already ruled out, and re-deriving it would re-spend the whole run.
+
 Secret scanning (`protocol.md` §0) covers the `LoopContext` like any other external-bound payload — and note that a loop sends one *per iteration*, so a payload scanned once at iteration 1 has been re-sent a dozen times by the end.
 
 ---
@@ -283,4 +305,4 @@ Classic shapes: a mechanical migration across call sites, an audit sweep over ma
 
 If they decline, run `linear` and say what it will cost instead. If they accept, the fan-out replaces Phase 2 and the results still go through Phase 3 at the task's scale — N mechanical edits are exactly the changeset an acceptance gate is for.
 
-**Routes compose, and the useful composition is loop-inside-fanout's opposite:** a `loop`-routed task whose candidate generation is itself wide (many candidates per iteration rather than one per channel) is a fan-out *inside* §L4 step 2, and it needs the same user opt-in before it fires. A loop is not a licence to widen.
+**Routes compose, in one direction: fan-out inside a loop, never a loop inside a fan-out.** A `loop`-routed task whose candidate generation is wide — many candidates per iteration rather than one per channel — is a fan-out sitting inside §L4 step 2, and it needs the `Workflow` opt-in above before it fires. A loop is not a licence to widen. The reverse does not compose at all: a loop *inside* each fan-out item multiplies an unbounded iteration count by N items, with no single place holding the budget.
