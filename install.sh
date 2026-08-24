@@ -145,8 +145,10 @@ printf '\nSelf-test:\n'
 # babel (required): files present at destination
 # advanced.md is in the required set, not optional: L acceptance, the delta routing
 # and the stuck playbook all dispatch out of it, and an interrupted copy that left
-# it behind used to self-test as a complete install.
-if [ -f "$DEST/babel/SKILL.md" ] && [ -f "$DEST/babel/references/protocol.md" ] && [ -f "$DEST/babel/references/patterns.md" ] && [ -f "$DEST/babel/references/advanced.md" ]; then
+# it behind used to self-test as a complete install. loop.md is required for the
+# same reason one step earlier: Phase 0.5 reads it on EVERY task to pick the route,
+# so an install missing it silently runs every task linear.
+if [ -f "$DEST/babel/SKILL.md" ] && [ -f "$DEST/babel/references/protocol.md" ] && [ -f "$DEST/babel/references/patterns.md" ] && [ -f "$DEST/babel/references/advanced.md" ] && [ -f "$DEST/babel/references/loop.md" ]; then
   ok "babel (lead) installed"
   pass=$((pass+1))
 else
@@ -202,6 +204,25 @@ if command -v node >/dev/null 2>&1; then
   fi
   rm -f "$a6"
 fi
+
+# The loop route's frozen-set gate (loop.md §L2) is the one control standing between
+# a candidate and the evaluator it is scored by, and like the A6 script it lives in a
+# fenced block nothing parses until a live loop runs it. Check it here: extract, and
+# require it to be valid sh that defines all three functions. The behavioural test
+# (does it catch modification, deletion AND addition) is skills/babel/tests/loop-selftest.sh
+# in the repo, which needs the repo checkout this installer may not be run from.
+lp="$DEST/.babel-loop-check.$$.sh"
+awk '/^```bash$/{b="";inb=1;next} /^```$/{if(inb&&b~/frozen_manifest\(\) \{/){printf "%s",b;exit} inb=0;next} inb{b=b $0 "\n"}' \
+  "$DEST/babel/references/loop.md" > "$lp"
+if grep -q 'frozen_check() {' "$lp" && grep -q 'frozen_record() {' "$lp" && sh -n "$lp" 2>/dev/null; then
+  ok "babel loop.md frozen-set gate parses"
+  pass=$((pass+1))
+else
+  printf '  [FAIL] babel loop.md frozen-set gate missing or not valid sh (%s)\n' "$lp"
+  rm -f "$lp"
+  exit 1
+fi
+rm -f "$lp"
 
 # babel runtime prereqs (superpowers + Workflow tool) live inside Claude Code and
 # cannot be probed from a shell — see skills/babel/SKILL.md "Dependencies & minimal setup".

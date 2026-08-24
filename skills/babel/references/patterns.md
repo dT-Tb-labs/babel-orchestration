@@ -7,6 +7,7 @@ Audience: the lead LLM running babel. Each section is an executable procedure re
 - **M**: adds `#debate-aggregation`, the full `#acceptance-gate` procedure and merge (one round, no loop), protocol.md §5 (M shape) / §8-§10.
 - **L**: everything, plus advanced.md as pointed to (A1/A6/A9 fire only at L; **A5 fires at M as well** — see its own section for why).
 - advanced.md §A2 (stuck playbook) and §A3 (checkpoint) are Phase 2 events, not scale gates — they can fire at any scale; open them when they fire, not before.
+- **loop.md §L0 is read at every scale**, before any of the above: it decides whether this file's Phase 2 runs at all. The rest of loop.md opens only on the route it belongs to. A `loop`-routed task skips `#build-debug` and comes back here for `#acceptance-gate`; a `fanout`-routed one does the same.
 
 ---
 
@@ -68,6 +69,20 @@ Phase 2 procedure over superpowers:executing-plans / subagent-driven-development
 ## sequential-switching
 
 The diagnosis-handoff playbook for when stuck in Phase 2 (two consecutive failed fixes on the same problem) → `advanced.md` §A2.
+
+---
+
+## loop-engineering
+
+Replaces Phase 2 when Phase 0.5 routes `loop` → `loop.md` §L1-§L8. The charter gate (§L1) fires **before** any implementation work; the iteration (§L4) generates one candidate per channel blind and in parallel and lets the oracle select, so there is no merge and no adjudication in this phase — the whole reason a loop can afford three generators when an acceptance round can barely afford three reviewers.
+
+Two things route back into this file. The winner still runs `#acceptance-gate` at the task's scale — a measured candidate has not been reviewed on any of the four dimensions. And a loop that stalls goes to `#sequential-switching` before its user gate, with the whole candidate history (`state.json.loop.candidates`, each with the cascade stage it died at) as the input that a stuck Phase 2 usually lacks.
+
+---
+
+## workflow-fanout
+
+Proposed, never launched, when Phase 0.5 sees the shape → `loop.md` §L9. The proposal is the deliverable: the enumerated work-list, its size, per-item and total cost, whether worktree isolation is needed, and the shape (`pipeline()` unless a stage genuinely needs every prior result at once). babel's crew approval is not the `Workflow` tool's opt-in, and reading it as one launders a gate that exists deliberately. Accepted, it replaces Phase 2 and the result still comes back here for `#acceptance-gate`; declined, the task runs `linear` and the lead says what that costs instead.
 
 ---
 
