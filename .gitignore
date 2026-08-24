@@ -12,6 +12,7 @@ node_modules/
 # selftest scratch roots
 .gate-selftest-tmp/
 .deadline-selftest-tmp/
+.loop-selftest-tmp/
 
 # OS
 .DS_Store
