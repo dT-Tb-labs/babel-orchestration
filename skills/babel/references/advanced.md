@@ -655,3 +655,165 @@ Within one task, autonomously adjust channel composition with **no human gate**.
 **Grounding-cost discipline**: as defined in protocol.md §7b — the one consequence that matters here is that ungrounded findings stay out of the scoreboard entirely, so the bandit only ever reads reality-checked labels.
 
 **Observing ensemble value (byproduct)**: the scoreboard records for free which channel earned grounding-confirmed findings. If on some task `confirmed` comes almost entirely from one channel (e.g. Claude introspection), that is direct evidence that — **for that task** — the other channels could not earn their tokens (ablation by observation). This describes one task and is not grounds for a convention change; it revises the crew-composition table only after cross-task offline analysis + a human gate.
+
+## A10. Rule attribution (record in-task, judge offline)
+
+A9's last line says a convention changes "only after cross-task offline analysis
++ a human gate." Nothing implemented that analysis, and nothing recorded the
+inputs it would need. A10 is the record and the pass. It answers one question:
+**when a run failed at the process level rather than in the code under review,
+which written rule prescribed the action that failed, and where should a fix
+land** — babel's own docs, the project `CLAUDE.md`, or `~/.claude/`.
+
+Two halves, deliberately separated. The in-task half writes facts and never
+reasons about conventions. The offline half reasons, needs ≥2 tasks, and a human
+starts it. That is A9's ephemeral/persistent line drawn one level up: a pass that
+judged the run it was part of would be the persistent side running autonomously,
+which is the exact thing A9 refuses.
+
+**Why only two record points.** An earlier draft recorded six — degraded-channel
+rows, non-progressing rounds, budget overshoot, rework, unexecuted assertions,
+user corrections. Three of them cannot be attributed to a rule at all: for an
+outage or a flat round, the rule the lead was following governs the *response*,
+not the failure, so "would the failure have happened without this rule" is `no`
+by construction. Two more have no input — the lead's own spend is not reported to
+it, and degraded rows are already recorded mechanically by `results/<stem>.dead`
+(protocol.md §5) and the `.err` files, with no LLM in the path. Re-recording them
+in prose buys nothing and costs a judgment call.
+
+### Record — in-task
+
+`.babel/process-failures.jsonl`, **repo-level, not under `.babel/<task>/`**:
+task directories are discarded and this has to accumulate. **Only the lead
+appends** (protocol.md §5, parallel append is prohibited) — no subagent, no shim,
+no Workflow stage. Most runs write nothing.
+
+| id | fires | observed at |
+|---|---|---|
+| P4 | a new C/H in round N+1 cites lines that round N's fix wrote | merge step 3 |
+| P6 | the user corrects or rejects the lead at a gate | the gate itself |
+
+```json
+{"t":"P6","task":"<slug>","round":3,"commit":"<baseline commit>",
+ "what":"<one line: what the lead did>",
+ "prescribed":"<what the rule told the lead to do>",
+ "rule":{"quote":"<verbatim rule text>","file":"<path>","line":123},
+ "where":"<file:line | phase | channel>","cost":"<tokens or rounds, if known>"}
+```
+
+`prescribed` is what makes the offline test B runnable: without it the record
+cannot tell a lead that followed a rule into failure from one that violated it,
+and those two have opposite fixes. `rule` may be `null` — the lead could not
+quote one. **Write the `null` record anyway**: "no rule covered this" is a fact
+about the run, and dropping it is how the missing-rule case becomes invisible.
+Quote verbatim, at record time; a rule reconstructed at the end of a run is a
+plausible rule, not the one that was in context.
+
+**P4 needs an artifact that does not exist yet.** Change-impact routing
+intersects *paths* (patterns.md acceptance-gate step 5); no per-round fix hunk is
+persisted anywhere. So at merge step 4, after applying a round's fixes, write
+`git diff` for exactly the fixed paths to `.babel/<task>/fixes/r<N>.diff`. One
+command, at a point the lead is already standing on. Without it P4 is prose that
+nothing implements — this repo's endemic defect, and stating the record point
+without the artifact reproduces it exactly.
+
+**P6 at the crew-proposal gate has no directory to write to**: that gate runs
+before `.babel/<task>/` is initialized (SKILL.md Phase 0 item 3). Hold the record
+and flush it as part of the initialization step that follows approval. A
+correction at the residual-risk gate is recorded normally and is simply never
+read by this task — a later task's pass reads it. That ordering is why the pass
+is offline: the most valuable signal in the whole mechanism arrives after any
+end-of-task pass would have run.
+
+### Attribute — offline, user-invoked
+
+Reads `.babel/process-failures.jsonl` and nothing else. **Not the transcript** —
+reconstructing causes from a transcript is where confabulated ones come from.
+
+**Refuses on a single task's records**, reporting `insufficient evidence, N=1`
+and stopping. One data point does not revise a file injected into every session.
+
+The unit is a rule that ≥2 tasks implicate, not a record. Four tests:
+
+- **A. Present (mechanical).** Grep the quote in the named file at the named
+  line. No match → drop; a misremembered rule is not evidence about the real one.
+  *Ceiling*: grep proves textual presence, not that the file was loaded for that
+  session — `rules/**` is `paths:`-gated and imported project rules are not
+  resolvable after the fact.
+- **B. Followed or violated.** Compare `what` against `prescribed`. Followed into
+  failure → the rule text is a candidate for rewriting. Violated → the rule text
+  is not the defect; the finding is that nothing enforced it, and the landing site
+  is a hook or a test. Both branches must stay reachable — a record set that only
+  admits rules the lead says it followed can never produce the second.
+- **C. Would the rule's absence have changed the action?** Not "would the failure
+  have happened": that question refutes every process failure whose rule governs
+  the response. `prescribed` names the action, so the answerable form is whether
+  this rule is what prescribed it.
+- **D. Scope → landing rung.** (1) this task → nothing persists, not reported.
+  (2) babel's procedure → `protocol.md` / `patterns.md` / `advanced.md`; expected
+  home for nearly everything. (3) this repo → project `CLAUDE.md`. (4) would
+  recur in a session unrelated to babel → `~/.claude/CLAUDE.md` or
+  `~/.claude/rules/**`. **Rung 4 additionally needs evidence from more than one
+  repo**, which a repo-scoped record cannot supply on its own; report the gap
+  rather than promoting anyway.
+
+The mechanical parts of A and of the N=1 refusal are runnable as written. Both
+take fields already read out of a record, so nothing here parses JSON:
+
+```bash
+rule_present() {                       # file line quote  -> 0 if the quote is there
+  _f=$1; _l=$2; _q=$3
+  [ -n "$_q" ] || return 1             # an empty quote would match every line
+  [ -f "$_f" ] || return 1
+  case $_l in ''|*[!0-9]*) return 1 ;; esac
+  sed -n "${_l}p" "$_f" | grep -qF -- "$_q"
+}
+
+enough_tasks() {                       # records-file  -> 0 if >= 2 distinct tasks
+  [ -f "$1" ] || return 1
+  _n=$(sed -n 's/.*"task":"\([^"]*\)".*/\1/p' "$1" | sort -u | grep -c .)
+  [ "$_n" -ge 2 ]
+}
+```
+
+`grep -qF`, not a `case` glob: a rule quote containing `*` or `[` would otherwise
+match loosely, and these docs are full of both. *Ceilings*: `sed -n "${_l}p"`
+reads one line, so a quote spanning two lines fails A and must be recorded as a
+single-line substring; and `enough_tasks` reads the `task` field with a regex over
+our own writer's output, which is exactly as robust as that writer staying
+consistent.
+
+**The labels are deliberately not §7's.** `implicated` / `not-implicated` /
+`undetermined` — never `confirmed`, `refuted`, or `unresolvable`. Those are
+grounding outcomes only a §7 check writes (protocol.md §7), and this pass grounds
+nothing; the same reason A6 returns `upheld` rather than `confirmed`.
+
+### Report
+
+Plain output from the offline pass. **Never auto-applied, at any rung** — least
+of all rung 4, where the user's own rules already forbid auto-appending to
+`~/.claude/CLAUDE.md`.
+
+```
+[implicated|undetermined] <symptom, one line>     ← the lead's read, not a grounded finding
+  rule:      "<verbatim>"  (<file>:<line>)
+  tasks:     <slug>, <slug>          (n=<count>; n=1 is never reported)
+  followed:  <followed into failure | violated, unenforced>
+  landing:   <file>  (rung <n>)
+  proposal:  <diff, or the open question>
+```
+
+The `← the lead's read` qualifier is part of the format. An earlier draft
+borrowed §7's labels and presented judgment in the shape of grounded evidence,
+which is the confusion the label rule above exists to prevent.
+
+### Ceilings
+
+- A Claude model judges the rules that govern Claude models. Moving the pass out
+  of the run removes the live self-justification case, not the shared blind spot.
+- `rule.quote` and `prescribed` are self-reported by the component under
+  attribution — the same shape as `BABEL_DEADLINE`'s self-reported `cap_s`.
+- Test A proves presence, not injection.
+- Repo-scoped records cannot reach rung 4 on their own.
+
+Verify the mechanical half with `sh skills/babel/tests/rule-attribution-check.sh`.
