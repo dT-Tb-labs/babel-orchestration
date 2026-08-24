@@ -216,11 +216,23 @@ smaller hole than excluding the command. There is no settings key for it today.
 
 ## Status
 
-The three skill files are self-contained and carry empirical tuning from two
+The skill files are self-contained and carry empirical tuning from four
 real-task pilots (design-debate value, heterogeneous acceptance checks,
 canonical-data channel, difficulty-linked iteration cap). The original design
 spec is a local development document and is **not** bundled — the skills need
 only themselves to run.
+
+**The `loop` route has been run once** (`skills/babel/PILOTS.md`, pilot 4), at S
+scale in single-channel mode, on babel's own context cost. It reached −9.4%
+against a −20% target — so, a miss reported as one — and produced four defects
+in the route that reading the document could not have surfaced: the frozen-set
+gate reporting a setup mistake as tampering, then firing on the oracle's own
+build artifacts, a held-out that was the proxy in a different mask, and a
+"winner" that improved every automated check while making rules unreachable at
+another scale. All four are fixed. What that pilot could **not** exercise, and
+what is therefore still unvalidated: three-vendor candidate diversity, the
+externals' token reporting, and the spend-based re-approval trigger that
+depends on it.
 
 ## License
 
