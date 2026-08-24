@@ -62,6 +62,73 @@ Six changes fed back into the rules:
 - Mostly single-round: the multi-round cursor/delta machinery did not fire —
   motivating its demotion to an L-only appendix.
 
+## Pilot 4 — first `loop`-route run (2026-08-24, self-hosting: babel's loop route on babel's own context cost)
+
+The first run of the `loop` route, and the reason `references/loop.md` stopped
+being unvalidated prose. Deliberately small: S scale, **single-channel minimal
+mode** (both external shims present, both backends absent — `cdx-sol`'s
+companion missing, no `agy` binary), lead-as-generator per §L4 step 2's S case.
+
+- **Task**: reduce the bytes a lead must read for an S-scale linear task.
+  Oracle `skills/babel/tests/context-cost.py` (bytes as a stated proxy for
+  tokens, so the number is exactly reproducible); guard
+  `skills/babel/tests/rule-inventory.py`.
+- **Result**: baseline 63,481 → 57,501 (**−9.4%**) on one candidate — splitting
+  protocol §7 into what binds at every scale and a new §7b that only M/L read.
+  Target was −20%, so by §L5 this is "budget stopped, best-so-far and the gap",
+  not a success. The candidate was **not** promoted: see the reachability
+  finding below.
+- **What the route validated**: the charter gate, the baseline pair, the
+  cascade ordering, worktree isolation, and the frozen-set gate all behaved as
+  written. **What it could not**: three-vendor diversity, the externals'
+  `BABEL_USAGE` reporting, and therefore the 2×-spend re-approval trigger.
+
+Five things fed back into the rules, four of them defects the document could
+not have surfaced without being run:
+
+- **The frozen gate reported a setup mistake as tampering.** §L4 step 3
+  isolates candidates in a git worktree; a worktree built from a commit does
+  not contain an uncommitted oracle, so `frozen_check` saw the frozen set as
+  modified on iteration 1. Added `frozen_precheck` (exit 2 = setup, distinct
+  from 1 = violation) and the rule that the frozen set is committed before
+  iteration 0. (§L2)
+- **The frozen gate then fired on the oracle's own build artifacts** —
+  `__pycache__/*.pyc` written beside the oracle by running it. A control that
+  cries wolf on its own artifacts is a control that gets switched off. The
+  manifest now drops git-ignored paths. (§L2)
+- **...and the first fix had a second bug, also found by running it**: asking
+  git about ignores in a plain *subdirectory* answers about the enclosing
+  repository, and since `.babel/` is itself gitignored, a tree under it came
+  back entirely ignored and the manifest was empty. The filter now applies
+  only when the tree is a worktree top level. (§L2)
+- **The drafted held-out was the proxy in a different mask.** A second byte
+  count over a wider reading set moved the same way for the same reason. Added
+  the charter-time test — *could a change that merely moves content move both?*
+  — and the guard/held-out distinction: when the user's invariant is not
+  measurable (here: "the output gets less accurate"), the honest configuration
+  is a guard that bounds what was destroyed, reported in those words, never
+  promoted to evidence that quality held. (§L3)
+- **Reachability is the regression no numeric oracle sees.** The winning
+  candidate cut 9.4% by *moving* half a section behind a scale gate, leaving it
+  unreachable at a scale that needs it — with the rule-inventory guard green,
+  because nothing was deleted. Every automated check passed on a candidate that
+  had broken the skill. Moving candidates now get their routing read by hand.
+  (§L5)
+
+One more, kept as an observation rather than a rule: the three candidate lines
+of attack this task admitted were **complements, not substitutes** — scoping
+protocol §7, scoping SKILL.md, and compressing prose all add up rather than
+competing. §L4's winner-takes-one selection discards the others by
+construction. Whether that is a real limit of the route or an artifact of a
+docs-compression task needs a second loop pilot on code before it becomes a
+rule.
+
+The charter gate earned its slot: the answer to the negative question ("what
+would make you say this hit its number and still wasn't worth running?") was
+*"if the output gets less accurate"*, which is exactly the invariant the byte
+oracle cannot measure — and that one sentence is what produced the §L3 fix
+above.
+
 ---
 
 The original design-rationale spec is a local development document, not bundled.

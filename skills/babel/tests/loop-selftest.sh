@@ -84,4 +84,42 @@ mkdir "$WORK/empty"
 frozen_record "$WORK" empty >/dev/null 2>&1
 [ $? -eq 2 ] || { echo 'FAIL: empty frozen set recorded as a valid manifest'; exit 1; }
 
-echo 'PASS: loop.md frozen-set gate catches modification, deletion and addition'
+grep -q '^frozen_precheck() {' "$BLOCK" || { echo "FAIL: block never defines frozen_precheck"; exit 1; }
+
+# --- the git cases. Everything above ran in a plain directory; the two defects
+# this section covers were both found by running the route for real, and both
+# only exist once the frozen root lives inside a worktree.
+REPO2=$TMP/repo2
+mkdir "$REPO2"
+( cd "$REPO2" && git init -q && git config user.email t@t && git config user.name t )
+mkdir -p "$REPO2/tests"
+printf 'def test(): assert bench() < 100\n' > "$REPO2/tests/oracle.py"
+printf '__pycache__/\n' > "$REPO2/.gitignore"
+( cd "$REPO2" && git add -A && git commit -qm init )
+
+FROZEN=$TMP/blackboard/f2.manifest
+frozen_record "$REPO2" tests || { echo 'FAIL: frozen_record failed inside a repo'; exit 1; }
+frozen_check "$REPO2" tests 2>/dev/null || { echo 'FAIL: clean repo tree rejected'; exit 1; }
+
+# 1. an artifact the ORACLE ITSELF writes beside itself must not read as tampering
+mkdir -p "$REPO2/tests/__pycache__"
+printf 'compiled\n' > "$REPO2/tests/__pycache__/oracle.cpython-311.pyc"
+frozen_check "$REPO2" tests 2>/dev/null ||
+  { echo 'FAIL: a gitignored build artifact under a frozen root read as a violation'; exit 1; }
+# ...while a NON-ignored addition in the same directory still must
+printf 'def bench(): return 1\n' > "$REPO2/tests/conftest.py"
+frozen_check "$REPO2" tests >/dev/null 2>&1 &&
+  { echo 'FAIL: the ignore filter swallowed a real addition'; exit 1; }
+rm "$REPO2/tests/conftest.py"
+
+# 2. an untracked oracle is a SETUP error (2), never a violation (1): a worktree
+# built from a commit would simply not contain it.
+printf 'x\n' > "$REPO2/tests/helper.py"
+frozen_precheck "$REPO2" tests >/dev/null 2>&1
+[ $? -eq 2 ] || { echo 'FAIL: frozen_precheck did not flag an untracked file in a frozen root'; exit 1; }
+( cd "$REPO2" && git add -A && git commit -qm add )
+frozen_precheck "$REPO2" tests >/dev/null 2>&1 ||
+  { echo 'FAIL: frozen_precheck rejected a fully committed frozen root'; exit 1; }
+
+echo 'PASS: loop.md frozen-set gate catches modification, deletion and addition,'
+echo "      ignores the oracle's own build artifacts, and separates setup from tampering"
