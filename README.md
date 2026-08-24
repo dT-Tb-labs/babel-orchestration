@@ -32,6 +32,7 @@ skills/
     SKILL.md               # runbook: crew table, phase map, cost/safety discipline
     references/protocol.md # AI-to-AI wire format (packets, blackboard, degradation)
     references/patterns.md # per-phase playbooks (debate / build-debug / acceptance-gate)
+    references/loop.md     # route selection + loop engineering (oracle, cascade, frozen set)
   cdx-sol/
     SKILL.md
     cdx-sol.mjs            # background+poll wrapper around codex-companion (Node, no deps)
@@ -39,6 +40,60 @@ skills/
     SKILL.md
     agy_pty_wrapper.py     # cross-platform PTY wrapper for agy bug #76 (pywinpty / ptyprocess)
 ```
+
+## Three shapes a task can run in
+
+Before picking a crew, babel picks a **route** (`skills/babel/references/loop.md` §L0).
+Scale (S/M/L) sizes the crew; the route decides what the crew does with it.
+
+| Route | The task is | What runs |
+|---|---|---|
+| `linear` | a change someone can specify | design debate → build-debug → acceptance gate |
+| `loop` | a number to move, where nobody yet knows which change moves it | a multi-model optimization loop against an automated oracle |
+| `fanout` | the same small change across many independent sites | babel *proposes* a `Workflow` fan-out and waits for you to accept |
+
+### Loop engineering
+
+When the goal is measurable and the open question is *which* change wins, babel runs
+an improvement loop instead of a linear implementation phase:
+
+- **A charter gate first.** babel drafts the goal from your repo, then asks you to
+  correct it — the metric and its direction, the target value, the exact oracle
+  command, and the invariants that must hold regardless of the metric. A loop with an
+  underspecified goal does not fail; it succeeds at the wrong thing for its whole budget.
+- **Three models generate, the oracle selects.** Claude, GPT-5.6-SOL and Gemini 3 each
+  propose one candidate per iteration, blind to each other, isolated in their own
+  worktrees. Nobody votes — the measurement decides, which is why a loop can afford
+  three generators where an acceptance round can barely afford three reviewers.
+  The winner's diff and score are carried into every channel's next prompt, so the
+  three compound instead of running three separate single-model loops.
+- **Two separate cost controls, because they govern different things.** A cascade
+  (`git apply --check` → frozen-set hash → build/lint → fast oracle subset → full
+  oracle) keeps *oracle time* down: only survivors reach the expensive stage. Tokens
+  are spent upstream of all of that, at generation, so they get their own controls —
+  a per-channel delta from iteration 2 on (the charter and history are sent once, not
+  twelve times), a fold ladder that lets a losing channel drop to every-other-iteration
+  and then to a two-line hint instead of a full patch, and SOL pinned to its normal
+  tier. A full-budget loop is still a millions-of-tokens run, and babel quotes it as
+  one up front and asks again at iteration 5.
+- **Anti-gaming is mechanical, not instructional.** The oracle, its inputs and every
+  test file are a frozen set whose manifest lives outside the candidate worktrees and
+  is re-hashed before any candidate is scored; a mismatch aborts the iteration and
+  goes to you, rather than scoring zero and moving on. The loop optimizes a *proxy*,
+  and a separate **held-out** oracle it never sees per-iteration is what the promoted
+  winner is finally judged on. Proxy up + held-out down stops the loop immediately.
+- **The winner still goes through the acceptance gate.** It has been measured, not
+  reviewed, and an optimizer is exactly the process most likely to produce code that
+  is correct on the measured path and nowhere else.
+
+The mechanisms are adapted from public work — the evaluation cascade and score-carrying
+prompt sampler from [AlphaEvolve / OpenEvolve](https://github.com/codelion/openevolve),
+novelty rejection and bandit-over-ensemble from
+[ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve), and the proxy/held-out split
+plus evaluator-tampering detection from the reward-hacking benchmarks (EvilGenie,
+SpecBench, RewardHackingAgents). Credits and the reason each rule has its shape are in
+`references/loop.md` §L8.
+
 
 ## Install
 
@@ -161,11 +216,23 @@ smaller hole than excluding the command. There is no settings key for it today.
 
 ## Status
 
-The three skill files are self-contained and carry empirical tuning from two
+The skill files are self-contained and carry empirical tuning from four
 real-task pilots (design-debate value, heterogeneous acceptance checks,
 canonical-data channel, difficulty-linked iteration cap). The original design
 spec is a local development document and is **not** bundled — the skills need
 only themselves to run.
+
+**The `loop` route has been run once** (`skills/babel/PILOTS.md`, pilot 4), at S
+scale in single-channel mode, on babel's own context cost. It reached −9.4%
+against a −20% target — so, a miss reported as one — and produced four defects
+in the route that reading the document could not have surfaced: the frozen-set
+gate reporting a setup mistake as tampering, then firing on the oracle's own
+build artifacts, a held-out that was the proxy in a different mask, and a
+"winner" that improved every automated check while making rules unreachable at
+another scale. All four are fixed. What that pilot could **not** exercise, and
+what is therefore still unvalidated: three-vendor candidate diversity, the
+externals' token reporting, and the spend-based re-approval trigger that
+depends on it.
 
 ## License
 
