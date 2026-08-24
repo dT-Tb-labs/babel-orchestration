@@ -67,7 +67,8 @@ PROFILES = {
             "references/patterns.md", ["## debate-aggregation", "## acceptance-gate"]
         )
         + sections(
-            "references/protocol.md", ["## 5.", "## 8.", "## 9.", "## 10."]
+            "references/protocol.md",
+            ["## 5.", "## 7b.", "## 8.", "## 9.", "## 10."],
         )
     ),
     # L, loop: the M set plus all of loop.md and the advanced sections an L
