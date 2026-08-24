@@ -67,9 +67,15 @@ an improvement loop instead of a linear implementation phase:
   three generators where an acceptance round can barely afford three reviewers.
   The winner's diff and score are carried into every channel's next prompt, so the
   three compound instead of running three separate single-model loops.
-- **A cascade keeps it affordable.** Candidates die on `git apply --check`, then a
-  frozen-set hash, then build/lint, then a fast oracle subset. Only survivors reach
-  the full oracle.
+- **Two separate cost controls, because they govern different things.** A cascade
+  (`git apply --check` → frozen-set hash → build/lint → fast oracle subset → full
+  oracle) keeps *oracle time* down: only survivors reach the expensive stage. Tokens
+  are spent upstream of all of that, at generation, so they get their own controls —
+  a per-channel delta from iteration 2 on (the charter and history are sent once, not
+  twelve times), a fold ladder that lets a losing channel drop to every-other-iteration
+  and then to a two-line hint instead of a full patch, and SOL pinned to its normal
+  tier. A full-budget loop is still a millions-of-tokens run, and babel quotes it as
+  one up front and asks again at iteration 5.
 - **Anti-gaming is mechanical, not instructional.** The oracle, its inputs and every
   test file are a frozen set whose manifest lives outside the candidate worktrees and
   is re-hashed before any candidate is scored; a mismatch aborts the iteration and
