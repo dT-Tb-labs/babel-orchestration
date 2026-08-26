@@ -3,9 +3,12 @@
 // stubs. Like gate-selftest.sh and loop-selftest.sh, it never copies the block: a
 // template that stops parsing, or stops rejecting what it exists to reject, fails
 // here. A6 is the largest executable in this skill (~350 lines of real JavaScript
-// that runs every L acceptance round) and until this file it had no test at all —
-// the endemic defect this repo keeps paying for is a doc-embedded block that is
-// broken until someone runs it.
+// that runs every L acceptance round). It was not untested: install.sh already
+// parses the block and exercises `receiptFailure` on seven cases. What it did not
+// reach is everything else — the args guard, the void-round throw, the reviewer
+// brackets, verify routing, rejection handling and cap accounting — which is what
+// this file adds. The receipt-gate cases overlap install.sh deliberately: that
+// check runs where the repo may not exist, this one runs where it does.
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

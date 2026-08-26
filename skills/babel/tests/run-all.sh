@@ -45,6 +45,16 @@ run() {
       report "$_name" BLOCKED "leftover scratch dir — remove it and re-run (see the header of this script)"
       skip=$((skip+1)); skipped="$skipped $_name"
       return ;;
+    # A sandboxed run denies the writes these tests need, and the failure surfaces
+    # as a perfectly ordinary-looking assertion message several lines later — the
+    # test says a gitignored artifact read as a violation, when what actually
+    # happened is that `git init` could not copy its hook templates. Reporting that
+    # as FAIL sends the next reader to debug an assertion that is fine. Measured on
+    # this repo: loop-selftest and gate-selftest both do it.
+    *"Operation not permitted"*)
+      report "$_name" BLOCKED "sandbox denied a write it needs — re-run outside the sandbox; any assertion message above it is a symptom, not the cause"
+      skip=$((skip+1)); skipped="$skipped $_name"
+      return ;;
   esac
   if [ "$_rc" -eq 0 ]; then
     report "$_name" PASS ""

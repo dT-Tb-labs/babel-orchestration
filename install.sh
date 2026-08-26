@@ -369,5 +369,28 @@ else
   note "python not found — agy channel unavailable (babel degrades to fewer channels)"
 fi
 
+# The checks above extract the two fenced blocks the installer can reach and test
+# them in isolation. The repo's own test files go further — the A6 template's
+# reviewer brackets, verify routing and cap accounting, the merge block's
+# anonymisation, the loop gate's three violation classes — and until this block
+# nothing ran them: no CI, and the installer only ever checked that files existed.
+# A test nobody runs is the same defect as no test, one level up.
+#
+# Optional, not required, and deliberately so: two of those tests need to create and
+# delete a scratch directory at the repo root, which a sandboxed run denies, and an
+# install has no business failing because a directory could not be removed. The
+# runner reports that case as BLOCKED rather than FAIL and exits 0, so a real
+# assertion failure here is a real assertion failure.
+if [ -f "$SRC_DIR/babel/tests/run-all.sh" ]; then
+  if sh "$SRC_DIR/babel/tests/run-all.sh" >/dev/null 2>&1; then
+    ok "babel self-tests: no failures (run 'sh skills/babel/tests/run-all.sh' to see them, and to see any that did not run)"
+    pass=$((pass+1))
+  else
+    note "babel self-tests reported a failure — run 'sh skills/babel/tests/run-all.sh' OUTSIDE the Claude Code sandbox to see which. The install itself is fine; this is about the source."
+  fi
+else
+  note "babel test files not present (installing from a copy without tests/) — the self-test suite was not run."
+fi
+
 printf '\nDone. %d required OK, %d optional warning(s).\n' "$pass" "$warn"
 printf 'babel runs with whatever channels passed above; missing optional channels just reduce independent review depth.\n'
