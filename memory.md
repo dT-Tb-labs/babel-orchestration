@@ -47,6 +47,8 @@ were the args guard, void round, bracket, verify routing, rejection, and cap acc
 
 ## 次のタスク / 未解決
 
+- **Standing objective (user, 2026-08-26)**: babel exists to solve complex tasks with **Claude + SOL + agy — three bodies** — at the best solution *and* efficiently. That lineup is the **M** scale. Judge every proposal against it.
+- **Structural misalignment found 2026-08-26**: every adaptive/measured mechanism (A9 fold, co-failure split, A10 scoreboard) is **L-only** — SKILL.md 114 "S/M use a fixed lineup (too little data to learn from)", advanced.md 652 "never at S/M, which have no scoreboard". So the target 3-body configuration is exactly the one babel never learns from. Per-task data at M *is* too thin; a cross-task ledger is what would make M-scale learning possible at all.
 - **A9/A10 は M ゲート通過済みだが、ラウンド2の修正は未測定で運用実績 N=0。**
 - **A10 の天井（明記済み、未解決）**: repo スコープの記録は段4（`~/.claude/`）に構造上到達しない / Claude が Claude を律するルールを裁く循環はオフライン化で薄まるだけ / `rule.quote` と `prescribed` は帰属対象自身の自己申告 / テストAは存在証明であって注入証明ではない。
 - **context cost（前回の誤読を訂正済み）**: `context-cost.py` はバイトを出す（~4 bytes/token）。s-linear 58,123B ≈ 14.5k tokens / m-linear ≈ 24k / l-loop ≈ 43k。**「S は修正より規則のほうが大きい」は誤り** — 圧縮の優先度は低い。
