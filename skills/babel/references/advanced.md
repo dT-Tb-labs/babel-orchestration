@@ -537,11 +537,11 @@ Within one task, autonomously adjust channel composition with **no human gate**.
 
 **Sole signal — grounded outcomes**: use only the `grounded` records in `state.json.channel_scoreboard` (protocol.md §5), each carrying the check that produced it, and derive `confirmed`/`refuted` from them. Never use subjective lead/LLM evaluation (`protocol.md` §7 invariant), and never read a record with no `check` — a label with no evidence behind it is a lead's opinion wearing a grounding label, and this rule is the only consumer that would spend crew composition on it.
 
-**Reward = `Σ(1/reporters over confirmed records) / tokens`**, not `confirmed/token`. Every channel that reported a finding keeps the full `confirmed` label (protocol.md §7b — labels describe findings, not races), but a defect three channels all reported pays each of them 1/3, while one only that channel saw pays 1. Under the unsplit form the cheapest way to lead the reward was to report whatever is most likely to be reported by everyone, which selects for high-base-rate obvious findings and against exactly the independent coverage a multi-channel crew is bought for. The split is order-independent, so it reintroduces no latency race. **Measured bound on what this buys**: on a 2-round run where both externals reviewed the same payload, *every* confirmed finding had `reporters: 2`, so the split rescaled both channels identically and reordered nothing. Duplicate credit only discriminates when coverage genuinely diverges — which is an argument for giving channels different scopes or dimensions, not against the split, whose purpose is to stop a channel from *farming* the overlap. `confirmed`/`refuted` **counts** still drive the drop rules below unchanged: a channel that only ever confirms duplicates is earning less reward, but it is not producing false positives, and dropping it is not what this measures.
+**Reward = `Σ(1/reporters over confirmed records) / tokens`** (`reporters` = `by.length`, protocol.md §5), not `confirmed/token`. Every channel that reported a finding keeps the full `confirmed` label (protocol.md §7b — labels describe findings, not races), but a defect three channels all reported pays each of them 1/3, while one only that channel saw pays 1. Under the unsplit form the cheapest way to lead the reward was to report whatever is most likely to be reported by everyone, which selects for high-base-rate obvious findings and against exactly the independent coverage a multi-channel crew is bought for. The split is order-independent, so it reintroduces no latency race. **Measured bound on what this buys**: on a 2-round run where both externals reviewed the same payload, *every* confirmed finding had `reporters: 2`, so the split rescaled both channels identically and reordered nothing. Duplicate credit only discriminates when coverage genuinely diverges — which is an argument for giving channels different scopes or dimensions, not against the split, whose purpose is to stop a channel from *farming* the overlap. `confirmed`/`refuted` **counts** still drive the drop rules below unchanged: a channel that only ever confirms duplicates is earning less reward, but it is not producing false positives, and dropping it is not what this measures.
 
 **Measured prior (round-1 composition)**: the in-Claude (a) track **starts folded** — one agent carrying all four dimensions, the small-bracket shape — regardless of diff size, and expands to its bracket width only after earning a grounded `confirmed`. This prior is a static default for **every L round 1**, not part of the online bandit — it applies even when the ≥3-round firing condition above never fires (an L task expected to converge in one round still starts (a) folded; there is simply no later round for the bandit to adjust). Rationale: on the one instrumented multi-round run, (a) was ~250× below the best channel on `confirmed/token`; full-width round 1 re-pays that measured loss every task just to let the bandit re-learn it. This is an N=1 prior, so it sets only the *starting* width — the fold-reversal rule below governs everything after round 1, and coverage is still guarded because a folded (a) covers all four dimensions in one prompt and the A5 critic checks for uncovered dimensions at every candidate clean round. (This paragraph is not the online loop writing itself into the conventions — it entered via the offline path, cross-task analysis plus the human gate, exactly the route the last paragraph of this section requires.) Degraded modes are exempt: when (a) is the only track (both externals dead, or single-channel minimal mode), it runs at full bracket width from round 1 — there the prior's comparison channel does not exist.
 
-**Adjustment rule (multi-armed bandit, reward as defined above)**: after each round's merge, read the scoreboard to decide the next round's crew composition. Every field this rule needs — the per-round `grounded` records with their `outcome`/`class`/`reporters`, plus `emitted`, `receipt` and `tokens` — is in the `channel_scoreboard` entry the lead appends at merge (protocol.md §5). Early = exploration (fire all channels), late = exploitation.
+**Adjustment rule (multi-armed bandit, reward as defined above)**: after each round's merge, read the scoreboard to decide the next round's crew composition. Every field this rule needs — the per-round `grounded` records with their `outcome`/`class`/`by`, plus `emitted`, `receipt` and `tokens` — is in the `channel_scoreboard` entry the lead appends at merge (protocol.md §5). Early = exploration (fire all channels), late = exploitation.
 - **Drop**: sum the last 2 round entries for a channel; `confirmed=0` and `refuted≥2` → remove it from the next round. Do not pay tokens for only false positives. Applies within the current task only; all channels revive next task. **Two entries are required, not "the last up to 2"**: on one observation the sum trivially satisfies both conditions, so a channel that opens with two refuted findings — pilot 3's agy round, exactly — is removed for the whole task on a sample of one, and drop has no revival path inside the task. A channel with a single entry is never dropped; fold it if it is expensive, and let round 2 supply the second observation.
 - **Drop on silence (positive-evidence requirement)**: the rule above is entirely
   negative — it fires on `refuted≥2`, which a channel must *say something* to earn.
@@ -649,6 +649,9 @@ Within one task, autonomously adjust channel composition with **no human gate**.
   `channel_scoreboard`: it is a restoration signal, not a grounding label (§7). Measured on this skill's own hardening run,
   the gap between the best and worst channel was ~250× reward, with no round in
   which the drop rule fired.
+- **Split scope on measured co-failure — the one crew comparison that survives across providers.** The fold rule above cannot compare SOL to agy, because their token totals are unlike quantities; **coverage needs no denominator**, so this rule can. Over the **last 4 entries**, for each pair of **full-width** channels count two things from the scoreboard's `grounded` records (protocol.md §5): a **co-miss** is a round in which some channel earned a grounded `confirmed` at a path that **both** channels' own receipts list (`reviewed_scope.<round>.<channel>`) and **neither** appears in that record's `by`; a **complementary catch** is a round in which **exactly one** of the two is in `by` for a finding at a path both reviewed. **≥2 co-misses and 0 complementary catches → the pair is measured-redundant**: dispatch the two on **disjoint path sets** partitioning the round's scope instead of both on all of it. **The split is a standing state that lasts exactly 2 rounds and then restores to shared scope on its own** — it is not a one-round action, and it is not reversed by a complementary catch. **An earlier draft said "one complementary catch restores shared scope" and that exit was unreachable**: a complementary catch is defined over a path *both* channels reviewed, and the split's own action is what removes the overlap, so once fired nothing could ever satisfy the restoration condition and the pair stayed narrowed for the rest of the task. A timed restore is the exit, because it is the only one the split does not destroy. Re-triggering needs a fresh ≥2/0 reading measured **after** the restore, over entries in which the pair actually shared scope again. **A timer nobody stores is not a timer**: the entry records `split:{with,since}` for each member of a split pair (protocol.md §5) — the partner and the round the split began — and the restore fires when `round - since >= 2`. Without it the next round's lead reads a narrowed dispatch with no record of why or for how long, and "exactly 2 rounds" becomes whatever it remembers. **The silence drop rule above needs no exemption while split, and must not be given one.** Its condition (4) already asks whether the defect lay in a path *this* channel's own receipt lists: a defect in the partner's half is not, so no missed round is charged for bytes the channel was never dispatched, and a defect in the channel's **own** half is, so silence there still counts exactly as it should. An earlier fix in this round exempted the whole pair and was wrong in the second half of that: it let a split channel go silent on its own assigned paths with impunity, which is the one thing the silence rule exists to catch, and a split would then be the cheapest place in babel to hide. This is the rule the duplicate split above only gestures at: the split stops a channel farming the overlap, but it cannot *remove* the overlap, and "give channels different scopes" stayed an argument with nothing measuring when to act on it. Pairwise co-failure is also the only diversity statistic that survives controlling for member capability (arXiv 2607.20768, 31,900 subsets: ρ = -0.432 at size 3, while disagreement and strict diversity reverse sign under control and are mostly re-expressing how strong the members are) — which is why the trigger is co-failure and not disagreement between channels. Splitting preserves the union of **paths** by construction — the partition covers what the shared dispatch did, so the A5 critic's dimension check is unaffected and no path goes unread. **It does not preserve depth, and the distinction is the whole cost of this rule**: for the two rounds it holds, every path in the pair's scope is read by one channel where two read it before, and a second independent look is exactly what catches what the first one missed. Change-impact routing (protocol.md §9) inherits that narrowing — a fix in one channel's half is re-reviewed by that channel alone. That is the trade being made, which is why the trigger demands **zero** complementary catches (evidence that the second look has produced nothing) and why the split is time-boxed rather than standing until reversed. **Never applies to a folded channel** — a folded channel is scored against full-width ones nowhere in this section — and never at S/M, which have no scoreboard. **"Full-width" has to be a stored fact, not a remembered one.** The scoreboard entry carries no width until this change adds one (`width`, protocol.md §5): the pre-existing fold rule leans on the same unstated input, and a rule that reads a channel's form from the lead's memory of what it dispatched is a rule that silently mis-fires after any round the lead did not write down. Both rules read `width` now.
+
+  *Ceilings*: a co-miss requires a `confirmed` record to exist, so rounds where nobody grounds anything produce no signal at all; receipt paths are self-declared; and 4 entries is a small window, in which a genuinely hard defect can produce co-misses that mean "hard", not "redundant" — which is exactly why the action is a scope split and never a drop.
 - **Exploitation (routing bias)**: read `grounded[].class` on confirmed records across rounds; if confirmed findings of one defect class concentrate in a channel, make it the priority re-run target of change-impact routing (protocol.md §9). Ties break toward the channel with the higher split reward, then toward the cheaper channel.
 - **Stretch/shrink**: read with the convergence trend (patterns.md termination condition) — if new C/H keeps declining and all channels skew `refuted`, treat as early convergence and fold the crew composition. While high `confirmed` continues, extend. Whether the round consumes budget is not this rule's call: `budget.rounds_consumed` has exactly one condition, "new C/H did not decrease" (protocol.md §5), and a high-`confirmed` round that still decreased new C/H leaves it untouched by that condition, not by this one. The 8-round hard ceiling on `round` still binds regardless — no scoreboard trend extends past it.
 
@@ -698,6 +701,7 @@ no Workflow stage. Most runs write nothing.
  "what":"<one line: what the lead did>",
  "prescribed":"<what the rule told the lead to do>",
  "rule":{"quote":"<verbatim rule text>","file":"<path>","line":123},
+ "mast":"FM-1.3",
  "where":"<file:line | phase | channel>","cost":"<tokens or rounds, if known>"}
 ```
 
@@ -708,6 +712,41 @@ quote one. **Write the `null` record anyway**: "no rule covered this" is a fact
 about the run, and dropping it is how the missing-rule case becomes invisible.
 Quote verbatim, at record time; a rule reconstructed at the end of a run is a
 plausible rule, not the one that was in context.
+
+`mast` is the failure mode from **MAST** (arXiv 2503.13657 — 1,642 traces across
+7 multi-agent frameworks, 14 modes, inter-annotator κ = 0.88), a **fixed**
+14-value vocabulary, never a per-task label, for the same reason
+`grounded[].class` is fixed to four dimensions (protocol.md §5): the offline pass
+groups across tasks, and grouping only works over one shared vocabulary. Use an
+external one rather than coining babel's own so that the labels mean the same
+thing outside this repo.
+
+| FC1 specification | FC2 inter-agent misalignment | FC3 task verification |
+|---|---|---|
+| FM-1.1 disobey task specification | FM-2.1 conversation reset | FM-3.1 premature termination |
+| FM-1.2 disobey role specification | FM-2.2 fail to ask for clarification | FM-3.2 no or incomplete verification |
+| FM-1.3 step repetition | FM-2.3 task derailment | FM-3.3 incorrect verification |
+| FM-1.4 loss of conversation history | FM-2.4 information withholding | |
+| FM-1.5 unaware of termination conditions | FM-2.5 ignored other agent's input | |
+| | FM-2.6 reasoning-action mismatch | |
+
+`null` when none of the fourteen fits — and write the record anyway, exactly as
+with `rule`. A run can honestly exhibit more than one mode; record the one the
+lead would fix, not the longest list, since the field exists to group records and
+a multi-label field groups nothing.
+
+**Why it earns its line**: the offline unit is *a rule ≥2 tasks implicate*, and
+most rules are implicated once. `mast` adds a second grouping axis that does not
+require the lead to have quoted the same rule text twice — two tasks that failed
+the same way under different rules, or under no quotable rule at all, are
+evidence about the **procedure**, and today they are two singletons the pass
+drops. It never promotes anything on its own; it only makes test D's scope
+question answerable for records whose `rule` is `null`.
+
+*Ceilings*: the label is self-reported by the component under attribution, the
+same shape as `rule.quote`; and MAST's own prevalences come from other
+frameworks' traces, so they say nothing about babel's rates — the vocabulary
+transfers, the base rates do not.
 
 **P4 needs an artifact that does not exist yet.** Change-impact routing
 intersects *paths* (patterns.md acceptance-gate step 5); no per-round fix hunk is
@@ -733,10 +772,31 @@ reconstructing causes from a transcript is where confabulated ones come from.
 **Refuses on a single task's records**, reporting `insufficient evidence, N=1`
 and stopping. One data point does not revise a file injected into every session.
 
-The unit is a rule that ≥2 tasks implicate, not a record. Four tests:
+**Validate every `mast` label with `mast_valid` before grouping on it** — an
+unrecognised label silently forms a group of its own, which is exactly the
+per-task vocabulary the fixed fourteen exist to prevent. A record failing it is
+read as `mast: null`.
 
-- **A. Present (mechanical).** Grep the quote in the named file at the named
-  line. No match → drop; a misremembered rule is not evidence about the real one.
+The unit is a rule that ≥2 tasks implicate, not a record — **or**, when the
+implicated rules differ or are `null`, a `mast` mode that ≥2 tasks implicate. The
+rule-keyed unit reports as it always did. The mode-keyed unit reports with `rule:`
+blank and is a **rung-2 finding at most**: a procedure failure nobody could quote
+a rule for has no rule text to rewrite, so it can propose a procedure change and
+never a rule edit. Four tests:
+
+- **A. Present (mechanical). Rule-keyed units only.** Grep the quote in the named
+  file at the named line. No match → drop; a misremembered rule is not evidence
+  about the real one. **A mode-keyed unit has no quote to grep** — its records are
+  exactly the ones whose `rule` is `null` or divergent — so applying A to it drops
+  every mode-keyed unit mechanically, which would make the `mast` grouping dead on
+  arrival. A mode-keyed unit's mechanical gate is instead `mast_valid` on the label
+  plus `enough_tasks` on the record set; it then skips **A, B and C** and is judged
+  on D alone, under D's rung-2 cap. C is skipped for the same reason as A: C asks
+  whether *this rule* is what prescribed the action, and a unit grouped precisely
+  because no single rule is quotable has no "this rule" to ask about. What a
+  mode-keyed unit is therefore worth, stated plainly rather than implied: two or
+  more tasks failed the same way, and nothing more. It proposes a procedure change
+  and carries no claim about which rule caused it.
   *Ceiling*: grep proves textual presence, not that the file was loaded for that
   session — `rules/**` is `paths:`-gated and imported project rules are not
   resolvable after the fact.
@@ -749,7 +809,13 @@ The unit is a rule that ≥2 tasks implicate, not a record. Four tests:
   have happened": that question refutes every process failure whose rule governs
   the response. `prescribed` names the action, so the answerable form is whether
   this rule is what prescribed it.
-- **D. Scope → landing rung.** (1) this task → nothing persists, not reported.
+- **D. Scope → landing rung. A mode-keyed unit is capped at rung 2 here, before
+  the scope question is asked** — the cap is a branch in this test, not prose
+  elsewhere: a mode-keyed unit that satisfies the rung-3 or rung-4 scope
+  criterion still lands at rung 2, and the scope evidence is reported rather
+  than promoted. A unit nobody could quote a rule for has no rule text to
+  rewrite, so it can propose a procedure change and nothing further.
+  (1) this task → nothing persists, not reported.
   (2) babel's procedure → `protocol.md` / `patterns.md` / `advanced.md`; expected
   home for nearly everything. (3) this repo → project `CLAUDE.md`. (4) would
   recur in a session unrelated to babel → `~/.claude/CLAUDE.md` or
@@ -769,6 +835,11 @@ rule_present() {                       # file line quote  -> 0 if the quote is t
   sed -n "${_l}p" "$_f" | grep -qF -- "$_q"
 }
 
+mast_valid() {                         # label -> 0 if it is one of MAST's 14 modes
+  case ${1:-} in FM-1.[1-5]|FM-2.[1-6]|FM-3.[1-3]) return 0 ;; esac
+  return 1                             # includes the empty label: `null` is not a mode
+}
+
 enough_tasks() {                       # records-file  -> 0 if >= 2 distinct tasks
   [ -f "$1" ] || return 1
   _n=$(sed -n 's/.*"task":"\([^"]*\)".*/\1/p' "$1" | sort -u | grep -c .)
@@ -777,7 +848,10 @@ enough_tasks() {                       # records-file  -> 0 if >= 2 distinct tas
 ```
 
 `grep -qF`, not a `case` glob: a rule quote containing `*` or `[` would otherwise
-match loosely, and these docs are full of both. *Ceilings*: `sed -n "${_l}p"`
+match loosely, and these docs are full of both. `mast_valid` is the opposite case
+and a `case` glob is right there — the fourteen labels are a closed set with no
+metacharacters, so the pattern *is* the vocabulary and a new mode cannot enter by
+typo. *Ceilings*: `sed -n "${_l}p"`
 reads one line, so a quote spanning two lines fails A and must be recorded as a
 single-line substring; and `enough_tasks` reads the `task` field with a regex over
 our own writer's output, which is exactly as robust as that writer staying
@@ -798,6 +872,7 @@ of all rung 4, where the user's own rules already forbid auto-appending to
 [implicated|undetermined] <symptom, one line>     ← the lead's read, not a grounded finding
   rule:      "<verbatim>"  (<file>:<line>)
   tasks:     <slug>, <slug>          (n=<count>; n=1 is never reported)
+  mast:      <FM-x.y | —>
   followed:  <followed into failure | violated, unenforced>
   landing:   <file>  (rung <n>)
   proposal:  <diff, or the open question>
