@@ -54,5 +54,6 @@ were the args guard, void round, bracket, verify routing, rejection, and cap acc
 - **A10 の天井（明記済み、未解決）**: repo スコープの記録は段4（`~/.claude/`）に構造上到達しない / Claude が Claude を律するルールを裁く循環はオフライン化で薄まるだけ / `rule.quote` と `prescribed` は帰属対象自身の自己申告 / テストAは存在証明であって注入証明ではない。
 - **context cost（前回の誤読を訂正済み）**: `context-cost.py` はバイトを出す（~4 bytes/token）。s-linear 58,123B ≈ 14.5k tokens / m-linear ≈ 24k / l-loop ≈ 43k。**「S は修正より規則のほうが大きい」は誤り** — 圧縮の優先度は低い。
 - 旧来の未解決: A9 の reward に coverage 項が無い / severity が集約されない / CRB 外部ベンチ未実施 / source delay が (a) トラックを端から端まで覆っていない。詳細 `.babel/HANDOFF-next.md`（gitignored）。
-- 未検証: A6 の reviewer/verifier 死亡、Windows 分岐、Fable5 チャネル。
+- 未検証: Windows 分岐、Fable5 チャネル。A6 の reviewer/verifier 死亡分岐は `tests/a6-selftest.mjs`
+  164/193 行がカバー済み（2026-08-26 に再実行して PASS を確認、旧「未検証」記載は誤り）。
 - memory.md は public repo で追跡対象。コスト実績も未解決欠陥もそのまま公開される。
