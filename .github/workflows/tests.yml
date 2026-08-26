@@ -1,0 +1,20 @@
+# The six self-tests had exactly one execution path — install.sh, run by hand.
+# This is the second one, and the only one nobody has to remember.
+#
+# --strict because a CI runner has no Claude Code sandbox and no leftover scratch
+# directory: every test is expected to run here, so BLOCKED/SKIP is a signal, not
+# a tolerable condition. install.sh deliberately does NOT pass --strict — an
+# install has no business failing because a sandbox denied a directory removal.
+#
+# node and python3 (a6-selftest.mjs, rule-inventory.py) are preinstalled on
+# ubuntu-latest; no setup steps needed.
+name: tests
+
+on: [push, pull_request]
+
+jobs:
+  self-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh skills/babel/tests/run-all.sh --strict
