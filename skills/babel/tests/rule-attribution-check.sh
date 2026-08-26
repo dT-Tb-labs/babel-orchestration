@@ -63,5 +63,18 @@ ok enough_tasks "$TWO"
 no enough_tasks "$TMP/absent.jsonl"
 no enough_tasks "$TMP/empty.jsonl"  # never created
 
-[ "$fails" -eq 0 ] && echo "PASS: A10 mechanical half (rule_present, enough_tasks)"
+# --- MAST vocabulary is closed ------------------------------------------------
+ok mast_valid FM-1.1
+ok mast_valid FM-1.5
+ok mast_valid FM-2.6
+ok mast_valid FM-3.3
+no mast_valid FM-1.6      # off the end of FC1
+no mast_valid FM-2.7      # off the end of FC2
+no mast_valid FM-3.4      # off the end of FC3
+no mast_valid FM-4.1      # no fourth category
+no mast_valid fm-1.1      # case matters: the vocabulary is written one way
+no mast_valid ''          # `null` is recorded as an absent label, never as a mode
+no mast_valid 'step repetition'   # the name is not the label; grouping keys on the id
+
+[ "$fails" -eq 0 ] && echo "PASS: A10 mechanical half (rule_present, enough_tasks, mast_valid)"
 exit "$fails"
