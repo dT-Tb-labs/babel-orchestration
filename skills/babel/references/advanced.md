@@ -649,7 +649,9 @@ Within one task, autonomously adjust channel composition with **no human gate**.
   `channel_scoreboard`: it is a restoration signal, not a grounding label (§7). Measured on this skill's own hardening run,
   the gap between the best and worst channel was ~250× reward, with no round in
   which the drop rule fired.
-- **Split scope on measured co-failure — the one crew comparison that survives across providers.** The fold rule above cannot compare SOL to agy, because their token totals are unlike quantities; **coverage needs no denominator**, so this rule can. Over the **last 4 entries**, for each pair of **full-width** channels count two things from the scoreboard's `grounded` records (protocol.md §5): a **co-miss** is a round in which some channel earned a grounded `confirmed` at a path that **both** channels' own receipts list (`reviewed_scope.<round>.<channel>`) and **neither** appears in that record's `by`; a **complementary catch** is a round in which **exactly one** of the two is in `by` for a finding at a path both reviewed. **≥2 co-misses and 0 complementary catches → the pair is measured-redundant**: next round, dispatch the two on **disjoint path sets** partitioning that round's scope instead of both on all of it. Reversible within the task — one complementary catch restores shared scope. This is the rule the duplicate split above only gestures at: the split stops a channel farming the overlap, but it cannot *remove* the overlap, and "give channels different scopes" stayed an argument with nothing measuring when to act on it. Pairwise co-failure is also the only diversity statistic that survives controlling for member capability (arXiv 2607.20768, 31,900 subsets: ρ = -0.432 at size 3, while disagreement and strict diversity reverse sign under control and are mostly re-expressing how strong the members are) — which is why the trigger is co-failure and not disagreement between channels. Splitting preserves union coverage **by construction**, since the partition covers the same paths the shared dispatch did, so the A5 critic's dimension check is unaffected and no path goes unread. **Never applies to a folded channel** — a folded channel is scored against full-width ones nowhere in this section — and never at S/M, which have no scoreboard. *Ceilings*: a co-miss requires a `confirmed` record to exist, so rounds where nobody grounds anything produce no signal at all; receipt paths are self-declared; and 4 entries is a small window, in which a genuinely hard defect can produce co-misses that mean "hard", not "redundant" — which is exactly why the action is a scope split and never a drop.
+- **Split scope on measured co-failure — the one crew comparison that survives across providers.** The fold rule above cannot compare SOL to agy, because their token totals are unlike quantities; **coverage needs no denominator**, so this rule can. Over the **last 4 entries**, for each pair of **full-width** channels count two things from the scoreboard's `grounded` records (protocol.md §5): a **co-miss** is a round in which some channel earned a grounded `confirmed` at a path that **both** channels' own receipts list (`reviewed_scope.<round>.<channel>`) and **neither** appears in that record's `by`; a **complementary catch** is a round in which **exactly one** of the two is in `by` for a finding at a path both reviewed. **≥2 co-misses and 0 complementary catches → the pair is measured-redundant**: dispatch the two on **disjoint path sets** partitioning the round's scope instead of both on all of it. **The split is a standing state that lasts exactly 2 rounds and then restores to shared scope on its own** — it is not a one-round action, and it is not reversed by a complementary catch. **An earlier draft said "one complementary catch restores shared scope" and that exit was unreachable**: a complementary catch is defined over a path *both* channels reviewed, and the split's own action is what removes the overlap, so once fired nothing could ever satisfy the restoration condition and the pair stayed narrowed for the rest of the task. A timed restore is the exit, because it is the only one the split does not destroy. Re-triggering needs a fresh ≥2/0 reading measured **after** the restore, over entries in which the pair actually shared scope again. **While split, the pair is exempt from the silence drop rule above**: its condition (4) asks whether the defect lay in a path the channel's own receipt lists, and disjoint scopes make that false by construction — a channel cannot miss a defect in bytes it was not dispatched, and counting it as a missed round would drop a channel for obeying this rule. This is the rule the duplicate split above only gestures at: the split stops a channel farming the overlap, but it cannot *remove* the overlap, and "give channels different scopes" stayed an argument with nothing measuring when to act on it. Pairwise co-failure is also the only diversity statistic that survives controlling for member capability (arXiv 2607.20768, 31,900 subsets: ρ = -0.432 at size 3, while disagreement and strict diversity reverse sign under control and are mostly re-expressing how strong the members are) — which is why the trigger is co-failure and not disagreement between channels. Splitting preserves the union of **paths** by construction — the partition covers what the shared dispatch did, so the A5 critic's dimension check is unaffected and no path goes unread. **It does not preserve depth, and the distinction is the whole cost of this rule**: for the two rounds it holds, every path in the pair's scope is read by one channel where two read it before, and a second independent look is exactly what catches what the first one missed. Change-impact routing (protocol.md §9) inherits that narrowing — a fix in one channel's half is re-reviewed by that channel alone. That is the trade being made, which is why the trigger demands **zero** complementary catches (evidence that the second look has produced nothing) and why the split is time-boxed rather than standing until reversed. **Never applies to a folded channel** — a folded channel is scored against full-width ones nowhere in this section — and never at S/M, which have no scoreboard. **"Full-width" has to be a stored fact, not a remembered one.** The scoreboard entry carries no width until this change adds one (`width`, protocol.md §5): the pre-existing fold rule leans on the same unstated input, and a rule that reads a channel's form from the lead's memory of what it dispatched is a rule that silently mis-fires after any round the lead did not write down. Both rules read `width` now.
+
+  *Ceilings*: a co-miss requires a `confirmed` record to exist, so rounds where nobody grounds anything produce no signal at all; receipt paths are self-declared; and 4 entries is a small window, in which a genuinely hard defect can produce co-misses that mean "hard", not "redundant" — which is exactly why the action is a scope split and never a drop.
 - **Exploitation (routing bias)**: read `grounded[].class` on confirmed records across rounds; if confirmed findings of one defect class concentrate in a channel, make it the priority re-run target of change-impact routing (protocol.md §9). Ties break toward the channel with the higher split reward, then toward the cheaper channel.
 - **Stretch/shrink**: read with the convergence trend (patterns.md termination condition) — if new C/H keeps declining and all channels skew `refuted`, treat as early convergence and fold the crew composition. While high `confirmed` continues, extend. Whether the round consumes budget is not this rule's call: `budget.rounds_consumed` has exactly one condition, "new C/H did not decrease" (protocol.md §5), and a high-`confirmed` round that still decreased new C/H leaves it untouched by that condition, not by this one. The 8-round hard ceiling on `round` still binds regardless — no scoreboard trend extends past it.
 
@@ -770,6 +772,11 @@ reconstructing causes from a transcript is where confabulated ones come from.
 **Refuses on a single task's records**, reporting `insufficient evidence, N=1`
 and stopping. One data point does not revise a file injected into every session.
 
+**Validate every `mast` label with `mast_valid` before grouping on it** — an
+unrecognised label silently forms a group of its own, which is exactly the
+per-task vocabulary the fixed fourteen exist to prevent. A record failing it is
+read as `mast: null`.
+
 The unit is a rule that ≥2 tasks implicate, not a record — **or**, when the
 implicated rules differ or are `null`, a `mast` mode that ≥2 tasks implicate. The
 rule-keyed unit reports as it always did. The mode-keyed unit reports with `rule:`
@@ -777,8 +784,14 @@ blank and is a **rung-2 finding at most**: a procedure failure nobody could quot
 a rule for has no rule text to rewrite, so it can propose a procedure change and
 never a rule edit. Four tests:
 
-- **A. Present (mechanical).** Grep the quote in the named file at the named
-  line. No match → drop; a misremembered rule is not evidence about the real one.
+- **A. Present (mechanical). Rule-keyed units only.** Grep the quote in the named
+  file at the named line. No match → drop; a misremembered rule is not evidence
+  about the real one. **A mode-keyed unit has no quote to grep** — its records are
+  exactly the ones whose `rule` is `null` or divergent — so applying A to it drops
+  every mode-keyed unit mechanically, which would make the `mast` grouping dead on
+  arrival. A mode-keyed unit's mechanical gate is instead `mast_valid` on the label
+  plus `enough_tasks` on the record set; it then skips A and B and is judged on C
+  and D alone.
   *Ceiling*: grep proves textual presence, not that the file was loaded for that
   session — `rules/**` is `paths:`-gated and imported project rules are not
   resolvable after the fact.
@@ -791,7 +804,13 @@ never a rule edit. Four tests:
   have happened": that question refutes every process failure whose rule governs
   the response. `prescribed` names the action, so the answerable form is whether
   this rule is what prescribed it.
-- **D. Scope → landing rung.** (1) this task → nothing persists, not reported.
+- **D. Scope → landing rung. A mode-keyed unit is capped at rung 2 here, before
+  the scope question is asked** — the cap is a branch in this test, not prose
+  elsewhere: a mode-keyed unit that satisfies the rung-3 or rung-4 scope
+  criterion still lands at rung 2, and the scope evidence is reported rather
+  than promoted. A unit nobody could quote a rule for has no rule text to
+  rewrite, so it can propose a procedure change and nothing further.
+  (1) this task → nothing persists, not reported.
   (2) babel's procedure → `protocol.md` / `patterns.md` / `advanced.md`; expected
   home for nearly everything. (3) this repo → project `CLAUDE.md`. (4) would
   recur in a session unrelated to babel → `~/.claude/CLAUDE.md` or
