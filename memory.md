@@ -3,8 +3,9 @@
 
 ## 現在の状態
 
-master `413d9dc`, pushed, tree clean. This session added CI (`9950947`, `9a84150`) and made
-`memory.md` tracked (`413d9dc`); `skills/babel/memory.md` was an unreferenced 4-line stub, deleted.
+master pushed, tree clean (`git log --oneline -1` for where — a hash written here is stale by the
+next commit, including the one that writes it). This session added CI and made `memory.md` tracked;
+`skills/babel/memory.md` was an unreferenced 4-line stub, deleted.
 
 **Verification: `sh skills/babel/tests/run-all.sh` — 6 passed, 0 failed, 0 not run** (outside the
 sandbox, and on every CI run). Two execution paths now: install.sh (lenient) and CI (`--strict`).
