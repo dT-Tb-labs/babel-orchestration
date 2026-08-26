@@ -129,6 +129,57 @@ would make you say this hit its number and still wasn't worth running?") was
 oracle cannot measure — and that one sentence is what produced the §L3 fix
 above.
 
+## Next tuning pass — the control arm at M (designed 2026-08-26, not yet run)
+
+**Why.** Every measured mechanism in babel is L-only: `channel_scoreboard` is
+initialised nowhere else (SKILL.md Phase 0), A9's fold and co-failure split say
+"never at S/M, which have no scoreboard", and SKILL.md's online-adaptation entry
+says "S/M use a fixed lineup (too little data to learn from)". The lineup this
+skill exists for — Claude + SOL + agy — **is** M. So the target configuration is
+the one configuration babel never learns from, and no run so far has measured
+what the crew adds over the lead alone. Every acceptance gate to date proves the
+crew found defects; none proves a single model would have missed them.
+
+**The cheap control arm is already in the pipeline and simply unrecorded.** At M
+the lead reads the changeset anyway. Recording what the lead alone found, before
+it sees SOL or agy, costs no extra dispatch.
+
+**Procedure for the next real M task — by hand, no rule and no new field yet:**
+
+1. Before dispatching SOL and agy, the lead writes its own findings to
+   `.babel/<task>/results/lead-solo-r1.jsonl`, same schema as a channel's. Write
+   it first; a lead that drafts this after reading the crew is measuring nothing.
+2. Run the task normally. Do not let the solo file influence dispatch.
+3. At the acceptance report, for each grounded `confirmed`, mark whether the solo
+   file already carried it. Match on `at` (path:line) and `class`; record the
+   judgement next to the finding, the way §7 makes grounding record its check —
+   an unrecorded match decision is the lead grading its own crew from memory.
+4. Report three numbers: confirmed total, of which solo-only-missed (**the crew's
+   marginal yield**), and solo-found-but-crew-missed (the cost of coordination —
+   the more interesting reading if it is ever non-zero).
+
+**What the numbers decide.** Marginal yield concentrated in one channel over a
+few tasks is the first evidence that could justify dropping the other for that
+task class — the only efficiency lever the 3-body lineup currently has, since
+nothing at M can drop a channel today. Marginal yield near zero is the finding
+that the crew does not pay at this scale, and it is worth more than any rule
+this pass would otherwise add.
+
+**Known ceilings, stated before the first run.** The control is not token-matched
+— the crew spends far more than the lead's own pass, so a positive result cannot
+separate "more models" from "more tokens"; a matched control costs a second
+crew-sized dispatch and is not worth it until this cheap number says something.
+The match judgement is made by the lead, which is the party the result flatters.
+And N grows one task at a time: nothing here is readable before roughly five.
+
+**If it survives that.** Only then is it worth building: a per-task line in a
+tracked cross-task ledger (per-task data at M genuinely is too thin — the
+cross-task record is what would make M-scale learning possible at all), plus the
+list of which A-rules actually fired, so rules that never fire in a 3-body run
+can be retired and their context cost with them. The ledger must be read by
+humans only and by no dispatch rule, or protocol.md §5's ban on carrying a
+scoreboard across tasks is broken in substance while being honoured in name.
+
 ---
 
 The original design-rationale spec is a local development document, not bundled.
