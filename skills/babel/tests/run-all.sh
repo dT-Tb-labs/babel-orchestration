@@ -10,11 +10,23 @@
 # NOT fail the run — but it is counted and named in the summary, because a silent
 # skip is how coverage disappears without anyone deciding to drop it.
 #
+# --strict also fails the run on anything that did not run. Use it where every test
+# is expected to be runnable — CI has no sandbox and no leftover scratch directory,
+# so a BLOCKED there means something changed and nobody was told.
+#
 # Two of these tests create a scratch directory at the repo root and delete it on
 # exit. Inside the Claude Code sandbox that delete is denied, so the directory
 # survives and every later run refuses to start. Run this OUTSIDE the sandbox, or
 # from a clone in a writable scratch path.
 set -u
+
+strict=0
+for _a in "$@"; do
+  case $_a in
+    --strict) strict=1 ;;
+    *) echo "run-all: unknown argument: $_a (only --strict)"; exit 2 ;;
+  esac
+done
 
 REPO=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "run-all: not in a git repository"; exit 1; }
 T=$REPO/skills/babel/tests
@@ -77,4 +89,8 @@ run rule-inventory         python3 rule-inventory.py
 printf '\n%d passed, %d failed, %d not run.\n' "$pass" "$fail" "$skip"
 [ -n "$skipped" ] && printf 'not run:%s — coverage those tests provide was NOT checked.\n' "$skipped"
 [ -n "$failed" ]  && printf 'failed:%s\n' "$failed"
+if [ "$strict" -eq 1 ] && [ "$skip" -ne 0 ]; then
+  printf 'strict mode: %d test(s) did not run.\n' "$skip"
+  exit 1
+fi
 exit "$fail"
