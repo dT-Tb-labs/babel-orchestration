@@ -18,3 +18,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sh skills/babel/tests/run-all.sh --strict
+
+      # --strict is the whole reason this job catches a test that stops running, so
+      # something has to check that --strict itself still works. Hide node, which
+      # makes a6-selftest report SKIP, and assert the two exits differ: --strict must
+      # fail, a plain run must not. Asserting only the failure would still pass if
+      # run-all.sh started failing for any other reason.
+      - name: strict mode must fail a run that skipped a test
+        run: |
+          set -e
+          NODE_DIR=$(dirname "$(command -v node)")
+          PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vFx "$NODE_DIR" | paste -sd: -)
+          export PATH
+          command -v node && { echo "node still on PATH — this check proves nothing"; exit 1; }
+          if sh skills/babel/tests/run-all.sh --strict >/dev/null 2>&1; then
+            echo "BUG: --strict exited 0 with a test that did not run"; exit 1
+          fi
+          sh skills/babel/tests/run-all.sh >/dev/null 2>&1 || { echo "BUG: the same run failed without --strict"; exit 1; }
+          echo "ok: --strict fails a skipped test, a plain run does not"
