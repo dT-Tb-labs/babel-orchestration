@@ -196,7 +196,7 @@ trap '[ -n "${agy_pid:-}" ] && kill_tree "$agy_pid"; rm -f "$agy_out" "$agy_err"
 # $AGY_JSON_ARGS is unquoted on purpose: it is either empty or the two fixed
 # tokens set above, never anything a caller supplies.
 # shellcheck disable=SC2086
-"$AGY_BIN" --mode plan --sandbox --add-dir "$PWD" --print-timeout "${budget_secs}s" $AGY_JSON_ARGS -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
+"$AGY_BIN" --model "${AGY_MODEL:-gemini-3.7-flash-high}" --mode plan --sandbox --add-dir "$PWD" --print-timeout "${budget_secs}s" $AGY_JSON_ARGS -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
 agy_pid=$!
 # Wall clock, not an iteration count: each loop pass costs a kill -0, a sleep and
 # scheduler latency, so counting passes overshoots on a loaded host and stalls
