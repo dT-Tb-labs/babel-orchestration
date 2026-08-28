@@ -156,7 +156,7 @@ EOF
 AGY_PRINT_TIMEOUT=180s agyask "$PROMPT"
 ```
 
-**Model selection:** agy 1.1.8 does take `--model` (see `agy models`), but `agyask` does not forward it — every call uses the CLI default. Add a passthrough there if a specific model is ever needed; there is no character-count-based model switching.
+**Model selection:** `agyask` pins `--model "${AGY_MODEL:-gemini-3.7-flash-high}"` (the PTY fallback defaults to the same). Override per call with `AGY_MODEL=<id> agyask "$PROMPT"`; `agy models` lists the valid ids. There is no character-count-based model switching.
 
 ## Step 3: Organize and Display the Results
 

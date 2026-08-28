@@ -135,7 +135,7 @@ def main() -> int:
         help="Full path to the agy executable (default: auto-resolve per-OS via PATH and known locations)",
     )
     ap.add_argument("--print-timeout", default="3m", help="agy internal --print-timeout value")
-    ap.add_argument("--model", default=None, help="Model to use (passed as agy --model)")
+    ap.add_argument("--model", default=os.environ.get("AGY_MODEL", "gemini-3.7-flash-high"), help="Model to use (passed as agy --model)")
     args = ap.parse_args()
 
     agy_path = resolve_agy_path(args.agy_path)
