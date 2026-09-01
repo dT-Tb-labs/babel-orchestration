@@ -183,4 +183,4 @@ scoreboard across tasks is broken in substance while being honoured in name.
 ---
 
 The original design-rationale spec is a local development document, not bundled.
-The three skill files are self-contained and need only themselves to run.
+The skill's five files (SKILL.md + four references) are self-contained and need only themselves to run.

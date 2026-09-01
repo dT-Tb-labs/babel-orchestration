@@ -3,7 +3,7 @@
 Audience: the lead LLM running babel. Each section is an executable procedure referenced from its phase in SKILL.md. For communication rules, packet formats, and error handling → **see protocol.md**. This file covers only "when, to whom, what, and in what order to dispatch."
 
 **Reading map by scale** — read only what the scale fires; the rest is dead weight in context:
-- **S**: `#build-debug` + the first paragraph of `#acceptance-gate` (S = one reviewer, one-shot) **plus "Assert the payload before dispatching it"** — the non-empty/reviewable-lines gate binds at every scale, and S is where a silent empty round has no critic to catch it — + protocol.md §0-§4 and §7 (grounding before fixing and repro safety bind at every scale; **not §7b**, which needs a second channel to mean anything). Skip `#debate-aggregation`, the merge loop, and termination conditions.
+- **S**: `#build-debug` + the first paragraph of `#acceptance-gate` (S = one reviewer, one-shot) **plus "Assert the payload before dispatching it"** — the non-empty/reviewable-lines gate binds at every scale, and S is where a silent empty round has no critic to catch it — + protocol.md §0-§4, §5 (only the `results/` naming and the S `state.json` shape), §7 and §10 (grounding before fixing and repro safety bind at every scale, and a dead reviewer at S is still a degradation row; **not §7b**, which needs a second channel to mean anything). Skip `#debate-aggregation`, the merge loop, and termination conditions.
 - **M**: adds `#debate-aggregation`, the full `#acceptance-gate` procedure and merge (one round, no loop), protocol.md §5 (M shape) / **§7b** / §8-§10. §7b is the half of verification that needs a second channel — dedup fingerprints, duplicate credit, the verifier-rejection rules — and it is exactly what M adds over S.
 - **L**: everything, plus advanced.md as pointed to (A1/A6/A9 fire only at L; **A5 fires at M as well** — see its own section for why).
 - advanced.md §A2 (stuck playbook) and §A3 (checkpoint) are Phase 2 events, not scale gates — they can fire at any scale; open them when they fire, not before.
@@ -27,6 +27,7 @@ Used in Phase 1 (design). Run only when triage classifies the task as M/L. For S
 Write the payload to `.babel/<task>/inbox/design-req.json` and have SOL read it via `--cwd` (protocol.md §3, to avoid the argv limit). Do not use protocol.md pointers with SOL; embed the output format inline each time (protocol.md §11).
 
 ```bash
+grep -rnEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"'[:space:]]*[:=]' .babel/<task>/inbox/design-req.json .babel/<task>/spec.md && { echo 'secret pattern in the design payload — mask before dispatch (protocol.md §0)' >&2; exit 1; }
 solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON." > .babel/<task>/results/design-sol.raw 2> .babel/<task>/results/design-sol.err
 ```
 
@@ -46,6 +47,7 @@ Output DesignPacket JSON only, no prose. Do not use any tools — answer directl
 
 ```bash
 [ "$(wc -c < .babel/<task>/inbox/agy-design.txt)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
+grep -nEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"'[:space:]]*[:=]' .babel/<task>/inbox/agy-design.txt && { echo 'secret pattern in the design payload — mask before dispatch (protocol.md §0)' >&2; exit 1; }
 AGY_PRINT_TIMEOUT=180s agyask "$(cat .babel/<task>/inbox/agy-design.txt)" > .babel/<task>/results/design-agy.raw 2> .babel/<task>/results/design-agy.err
 ```
 
@@ -130,7 +132,8 @@ gets its own file — the bytes above the token line are identical, so this cost
 ```bash
 : > "$TOKENS"          # per round, never appended across retries: a stale token from
                        # an earlier attempt would still validate a replayed response
-for ch in claude sol agy; do
+CHANNELS='claude sol agy'   # only what this scale dispatches: S = claude; M/L = all three (SKILL.md Phase 0)
+for ch in $CHANNELS; do
   # Round 1 dispatches the changeset; from round 2 each channel gets its OWN delta,
   # so resolve $SRC per channel. A constant here is the defect A6's header warns
   # about in the other direction: every channel silently re-reviews round 1.
@@ -166,6 +169,10 @@ for ch in claude sol agy; do
     "$(printf '%s' "$a" | shasum -a 256 | cut -c1-16)" \
     "$(printf '%s' "$b" | shasum -a 256 | cut -c1-16)" \
     "$(shasum -a 256 "$P" | cut -c1-16)" >> "$TOKENS"   # 4th field = args.digest (§A6)
+  # Secret scan before anything external reads it (SKILL.md Safety, protocol.md §0).
+  # A hit stops the dispatch; mask or drop the hunk and tell the user what was withheld.
+  grep -nEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"'[:space:]]*[:=]' "$P" \
+    && { echo "secret pattern in $P — mask it before dispatching $ch" >&2; exit 1; }
 done
 ```
 
@@ -303,7 +310,7 @@ AGY_PRINT_TIMEOUT=240s agyask "$(cat .babel/<task>/inbox/agy-r<N>.txt)" > .babel
    **`accessBlocked` is not `rejected` and not `unresolved`** (`advanced.md` §A6): the verifier obeyed the access list and declined to open a credential-bearing path, so it never ruled. Do not ground these by opening the cited path — that is the one thing the access list exists to prevent, and the lead is not exempt from it. Judge each on the finding text and whatever the changeset itself shows, then list them in the acceptance report as *unresolved-by-access*, naming the path. They cost no channel a retry and enter no scoreboard record.
    **Ground SOL findings on small diffs**: under 50 lines, SOL acceptance has more false positives (pilot 1 reported nonexistent trailing whitespace). Before adopting an SOL-only finding, confirm actual file lines; multi-system agreement may raise priority. (S acceptance dispatches no SOL — SKILL.md Phase 0 — so this applies to SOL's checkpoint and M/L acceptance findings, not to any S review.)
 4. Fix verified findings only. **Re-ground before repair** against primary sources (`canon` / actual file line) and confirm the premise; never trust an audit finding as-is. This is a premise re-check against the file as it stands now — an earlier fix may have moved or already closed it — not a second grounding event: the finding keeps the one `confirmed`/`refuted` label step 3 gave it, and nothing is appended to `channel_scoreboard` here (protocol.md §7, "each is grounded once"). Pilot 2's R4 re-grounding prevented 2 false detections. Every repair TaskPacket must include constraint: `before fixing, re-ground against canon and confirm the finding's premise.` **After the round's fixes are applied, write `git diff` for exactly the fixed paths to `.babel/<task>/fixes/r<N>.diff`** — the per-round fix hunks A10's P4 record point intersects the next round's findings against. Nothing else persists them: step 5's routing works at path granularity, so without this the record point is prose with no input.
-5. Re-run with **change-impact routing**: re-dispatch only the reviewers whose previous scope or unresolved findings intersect the fixed file/function (not unrelated reviewers). Previous scope is the receipts' `paths`, not the dispatched scope — what a channel was sent and what it read are now separately recorded, and routing wants the second. **For L multi-round, further narrow crew composition with `channel_scoreboard`** (protocol.md §5) — drop from the next round any channel with confirmed=0 and refuted≥2 over the last 2 rounds, or any channel silent (`emitted:0`) on 2 rounds where another channel earned a grounded `confirmed` over the same scope (within-task online adaptation, `advanced.md` §A9). Each grounding **record** — outcome plus the check that produced it, `class`, and `by` — is appended to the scoreboard at this merge stage (lead exclusively), written as the check runs. A record with no `check` is not a grounding event and must not be written (protocol.md §5): that field is the only thing separating a lead that ran the repro from a lead that agreed.
+5. Re-run with **change-impact routing**: re-dispatch only the reviewers whose previous scope or unresolved findings intersect the fixed file/function (not unrelated reviewers). Previous scope is the receipts' `paths`, not the dispatched scope — what a channel was sent and what it read are now separately recorded, and routing wants the second. **For L multi-round, further narrow crew composition with `channel_scoreboard`** (protocol.md §5) — drop from the next round any channel with confirmed=0 and refuted≥2 over the last 2 rounds, or any channel silent (zero C/H emitted; `emitted` counts every severity — advanced.md §A9) on 2 rounds where another channel earned a grounded `confirmed` over the same scope (within-task online adaptation, `advanced.md` §A9). Each grounding **record** — outcome plus the check that produced it, `class`, and `by` — is appended to the scoreboard at this merge stage (lead exclusively), written as the check runs. A record with no `check` is not a grounding event and must not be written (protocol.md §5): that field is the only thing separating a lead that ran the repro from a lead that agreed.
 6. Output M/L in line form like C/H, but do not verify or fix them. Present them to the user in the final report.
 
 ### Termination condition

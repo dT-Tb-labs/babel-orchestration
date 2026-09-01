@@ -49,7 +49,7 @@ The alternative — making agy work *inside* the sandbox — needs `sandbox.enab
 agy --version 2>&1 || "$LOCALAPPDATA/agy/bin/agy.exe" --version 2>&1
 ```
 
-Automatic resolution: `--agy-path` first; then Windows: `%LOCALAPPDATA%\agy\bin\agy.exe` → `PATH` (`shutil.which agy`); Linux/macOS: `PATH` → `~/.local/bin/agy`, `~/.antigravity/bin/agy`, `/usr/local/bin/agy`. On POSIX, use `--agy-path` when `agy` is off `PATH`.
+Automatic resolution in `agyask` (the path every babel call takes): `AGY_PATH` if set (must be executable, else exit 3); then `~/.local/bin/agy`, `~/.antigravity/bin/agy`, `/usr/local/bin/agy`, `/opt/homebrew/bin/agy`. **`PATH` is never searched** — the shim is sandbox-excluded, and a planted `agy` would run unsandboxed. When `agy` lives elsewhere: `AGY_PATH=/path/to/agy agyask "…"`. The PTY wrapper's own resolver (`--agy-path`, then Windows `%LOCALAPPDATA%\agy\bin\agy.exe` → `PATH`; POSIX `PATH` → the fixed list) applies only when the wrapper is run by hand; agyask always passes it `--agy-path`.
 
 ### 2. File reading in headless mode (`permissions.allow`)
 
