@@ -20,15 +20,17 @@ pass=0; warn=0
 ok()   { printf '  [ok]   %s\n' "$1"; }
 note() { printf '  [warn] %s\n' "$1"; warn=$((warn+1)); }
 
-# agy_present: mirror agy_pty_wrapper.py's resolve_agy_path so the self-test does
-# not warn "degrade off" for an agy the wrapper would actually resolve.
+# agy_present: mirror agyask's resolution, not the PTY wrapper's — agyask is what
+# runs, and it deliberately never searches PATH (it is sandbox-excluded). Checking
+# `command -v agy` here reported "channel ready" for an agy that only PATH could
+# find, and the first real call then exited 3 "agy not found".
 agy_present() {
-  command -v agy >/dev/null 2>&1 && return 0
+  [ -n "${AGY_PATH:-}" ] && [ -x "$AGY_PATH" ] && return 0
   if [ "$OS" = windows ]; then
     [ -f "${LOCALAPPDATA:-}/agy/bin/agy.exe" ] && return 0
   else
-    for p in "$HOME/.local/bin/agy" "$HOME/.antigravity/bin/agy" /usr/local/bin/agy; do
-      [ -f "$p" ] && return 0
+    for p in "$HOME/.local/bin/agy" "$HOME/.antigravity/bin/agy" /usr/local/bin/agy /opt/homebrew/bin/agy; do
+      [ -x "$p" ] && return 0
     done
   fi
   return 1
@@ -326,6 +328,7 @@ J
 ;;
 text) printf 'plain answer\n' ;;
 broken) printf '%s' '{"conversation_id":' ;;
+errenv) printf '%s' '{"status":"ERROR","error":"quota exceeded"}' ;;
 esac
 STUB
       chmod +x "$_stub"
@@ -336,6 +339,7 @@ STUB
       _u2=$(_usage nousage '"total_tokens":null')
       _u3=$(_usage badusage '"total_tokens":null')   # usage present but not an object
       _o4=$(_run jsonl); _o5=$(_run text); _o6=$(_run broken); _o7=$(_run jsonlnone)
+      _o8=$(_run errenv)   # an agy error envelope with exit 0 is not an answer either
       rm -f "$_stub"
       # The jsonl case is the one that matters most: a real review answer starts
       # with `{"receipt":…}`, so an agy build that ignores --output-format returns
@@ -345,14 +349,14 @@ STUB
 line2" ] \
          && [ "$_u1" -ge 1 ] && [ "$_u2" -ge 1 ] && [ "$_u3" -ge 1 ] \
          && [ "${_o4#\{\"receipt\"}" != "$_o4" ] && [ "${_o4%\"evidence\"]}" != "$_o4" ] \
-         && [ "$_o5" = "plain answer" ] && [ -z "$_o6" ] \
+         && [ "$_o5" = "plain answer" ] && [ -z "$_o6" ] && [ -z "$_o8" ] \
          && [ "${_o7##*
 }" = "NONE" ]; then
         ok "agyask usage reporting holds (envelope unwrapped, finding-jsonl and receipt+NONE passed through, plain text unchanged, garbage refused, usage null when unavailable)"
         pass=$((pass+1))
       else
-        printf '  [FAIL] agyask usage self-check: contract broken (envelope=%s usage=%s null=%s badusage=%s jsonl=%s text=%s garbage_stdout=%s clean_none=%s)\n' \
-          "$_o1" "$_u1" "$_u2" "$_u3" "$_o4" "$_o5" "$_o6" "$_o7"
+        printf '  [FAIL] agyask usage self-check: contract broken (envelope=%s usage=%s null=%s badusage=%s jsonl=%s text=%s garbage_stdout=%s clean_none=%s error_envelope_stdout=%s)\n' \
+          "$_o1" "$_u1" "$_u2" "$_u3" "$_o4" "$_o5" "$_o6" "$_o7" "$_o8"
         exit 1
       fi
       else

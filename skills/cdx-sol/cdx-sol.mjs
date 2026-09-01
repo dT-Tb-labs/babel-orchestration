@@ -50,7 +50,12 @@ function tierToEffort(tier) {
 function buildLaunchArgs({ prompt, cwd, effort, write }) {
   const args = ["task", "--background", "--json", "--cwd", cwd, "--effort", effort];
   if (write) args.push("--write");
-  args.push(`${prompt}${TERSE_SUFFIX}`);
+  // `--` first: the companion's parser reads any argv token starting with `--<flag>`
+  // as an option wherever it sits, and the prompt is untrusted text. A prompt that
+  // began with `--write=1` or `--resume-last=1` was consumed as that flag — the
+  // suffix appended below kept it from doing worse than a failed launch, but the
+  // terminator costs nothing and closes it for every caller.
+  args.push("--", `${prompt}${TERSE_SUFFIX}`);
   return args;
 }
 
@@ -66,7 +71,10 @@ function guardOutput(text, cwd, offloadChars = OFFLOAD_CHARS) {
     // bytes wherever it points. A real directory or nothing.
     const st = fs.lstatSync(dir, { throwIfNoEntry: false });
     if (st && !st.isDirectory()) throw new Error(`${dir} exists and is not a directory`);
-    if (st && fs.realpathSync(dir) !== path.resolve(dir)) throw new Error(`${dir} is a link`);
+    // Compare against the resolved *parent*, not path.resolve(dir): a symlink
+    // anywhere above cwd (macOS /tmp -> /private/tmp, a linked repo path) made
+    // this fire on a real directory and every long answer was reported lost.
+    if (st && fs.realpathSync(dir) !== path.join(fs.realpathSync(cwd), ".sol")) throw new Error(`${dir} is a link`);
     fs.mkdirSync(dir, { recursive: true });
     // Write the ignore rule once. Rewriting it every call silently discarded any
     // edit the user had made to that file.
@@ -173,6 +181,8 @@ function runSelftest() {
   assert.ok(!ro.includes("--write"));
   assert.ok(ro[ro.length - 1].startsWith("count lines"));
   assert.ok(ro[ro.length - 1].includes("Reply terse"));
+  assert.equal(ro[ro.length - 2], "--"); // the prompt is never parsed as options
+  assert.equal(buildLaunchArgs({ prompt: "--write=1 x", cwd: "C:/x", effort: "medium", write: false }).includes("--write=1 x\n\n---\nReply terse: no preamble, no restatement of the task, structured bullets, code only if essential."), true);
 
   const rw = buildLaunchArgs({ prompt: "fix bug", cwd: "C:/x", effort: "high", write: true });
   assert.ok(rw.includes("--write"));
@@ -211,6 +221,20 @@ function runSelftest() {
   assert.ok(g.offloaded && fs.existsSync(g.offloaded));
   assert.equal(fs.readFileSync(g.offloaded, "utf8").length, 30000);
   assert.ok(g.rendered.includes("truncated 30000 chars"));
+  // A cwd reached through a symlinked parent is a real directory, not a hostile
+  // `.sol`; the offload must succeed there. A symlinked `.sol` itself must not.
+  {
+    const real = path.join(tmp, "real"); fs.mkdirSync(real);
+    const link = path.join(tmp, "link"); fs.symlinkSync(real, link);
+    // Twice: the first call creates `.sol` and skips the check; the defect was in
+    // the second call, once the directory exists and is compared against its path.
+    guardOutput(big, link, 24000);
+    const viaLink = guardOutput(big, link, 24000);
+    assert.ok(viaLink.offloaded && fs.existsSync(viaLink.offloaded), "symlinked parent must not fail the offload");
+    const evil = path.join(tmp, "evil"); fs.mkdirSync(evil);
+    fs.symlinkSync(path.join(tmp, "elsewhere"), path.join(evil, ".sol"));
+    assert.equal(guardOutput(big, evil, 24000).offloaded, null, "a symlinked .sol must be refused");
+  }
   fs.rmSync(tmp, { recursive: true, force: true });
 
   // parseArgs: prompt assembly, "--" terminator, missing-value + numeric guards
@@ -221,6 +245,9 @@ function runSelftest() {
   assert.equal(term.write, false); // terminator kept the flag-like text as prompt
   assert.throws(() => parseArgs(["--cwd"]), /Missing value/);
   assert.throws(() => parseArgs(["--offload-chars", "abc"]), /must be a number/);
+  assert.equal(parseArgs(["--attach", "task-2026-08-20-abc_1"]).attach, "task-2026-08-20-abc_1");
+  assert.throws(() => parseArgs(["--attach", "../../etc/passwd"]), /not a job id/);
+  assert.throws(() => parseArgs(["--attach", "a/b"]), /not a job id/);
 
   console.log("cdx-sol.mjs selftest: PASS");
 }
@@ -244,7 +271,12 @@ function parseArgs(a) {
     else if (t === "--tier") o.tier = need(++i, "--tier");
     else if (t === "--cwd") o.cwd = need(++i, "--cwd");
     else if (t === "--allow-write") o.write = true;
-    else if (t === "--attach") o.attach = need(++i, "--attach");
+    else if (t === "--attach") {
+      // A job id names a file under the companion's state root. Only a plain
+      // token gets there — no separators, no `..`.
+      o.attach = need(++i, "--attach");
+      if (!/^[A-Za-z0-9_.-]+$/.test(o.attach) || o.attach.includes("..")) throw new Error(`--attach: not a job id: "${o.attach}"`);
+    }
     else if (t === "--offload-chars") {
       const n = Number(need(++i, "--offload-chars"));
       if (!Number.isFinite(n)) throw new Error("--offload-chars must be a number");
