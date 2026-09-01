@@ -38,7 +38,7 @@ cd "$TMP/repo" || exit 1
 ROOT=$PWD
 for f in .env .env.local server.pem server.key id_rsa id_ed25519 \
          .ssh/config .aws/credentials my_secret.md api_token.json db_password.txt \
-         'version..js' plain.txt sub/id_rsa sub/deep.txt \
+         'version..js' plain.txt sub/id_rsa sub/deep.txt .npmrc .netrc .pypirc sub/.npmrc \
          valid_id_rsa_parser.c valid_id_ed25519_helper.c; do
   : > "$f"
 done
@@ -67,7 +67,11 @@ deny .aws/credentials
 deny my_secret.md
 deny api_token.json
 deny db_password.txt
-deny dir                         # a directory is not a regular file
+deny .npmrc                      # registry auth tokens live here, under a name no *token* pattern reaches
+deny .netrc                      # same, for passwords
+deny .pypirc
+deny sub/.npmrc
+deny dir                        # a directory is not a regular file
 deny does-not-exist.txt
 
 allow plain.txt

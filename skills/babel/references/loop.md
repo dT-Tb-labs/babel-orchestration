@@ -61,7 +61,7 @@ Write it to `.babel/<task>/loop.md` and treat it as SoT for the run (`protocol.m
 | `oracle` | the exact command, its cwd, its measured per-run seconds, and its **baseline reading** | see §L2 — a loop that never measured its start cannot report improvement afterwards |
 | `invariants` | what stays true regardless of the metric: paths that must not change, tests that must stay green, behaviour that must not move | this is the anti-gaming boundary (§L3) and the user is the only party who can draw it |
 
-And three the lead may draft and have confirmed rather than asked cold: `budget` (max iterations, max oracle runs, token ceiling), `held_out` (§L3), `frozen` (§L2 — defaults to the oracle, its inputs, and every test file, which is usually right and must still be shown).
+And three the lead may draft and have confirmed rather than asked cold: `budget` (max iterations, max oracle runs, token ceiling), `held_out` (§L3), `frozen` (§L2 — defaults to the oracle, its inputs, every test file, **and the build/lint configuration cascade stage 3 executes** — `Makefile`, `package.json`, `pyproject.toml`, `setup.cfg`, `tox.ini`, `.pre-commit-config.yaml`, lint configs; a candidate that edits the build script has put its own code in front of the shell — which is usually right and must still be shown. Files are valid frozen roots, not only directories).
 
 `metric` and `target` together are the loop's whole objective function. If the user cannot state a target, that is not a charter to complete with a placeholder — it is evidence that predicate 4 failed and the task wants a `linear` route with a review, which is worth saying rather than looping.
 
@@ -85,7 +85,7 @@ Most candidates are wrong, and the full oracle is the expensive way to learn it.
 
 1. **Applies.** `git apply --check` against the iteration's base. A patch that does not apply costs nothing to reject and is the most common failure of a channel that reasoned about a stale tree.
 2. **Frozen set intact.** The gate below. This one is a *hard stop*, not a low score — see §L3.
-3. **Builds / typechecks / lints.** The repo's own fast checks, whatever a contributor runs locally.
+3. **Builds / typechecks / lints.** The repo's own fast checks, whatever a contributor runs locally. These run code from the candidate tree on a host with no sandbox, which is why the build/lint configuration they read is in the default frozen set (§L1): stage 2 has already established that nothing the commands read was rewritten.
 4. **Fast subset of the oracle**, where one exists (a smoke case, one benchmark shape, the first N tests). Reject anything that regresses here.
 5. **Full oracle.** Only survivors reach it.
 
@@ -112,9 +112,18 @@ frozen_manifest() {
   for r in "$@"; do
     [ -e "$t/$r" ] || { echo "frozen root missing under $t: $r" >&2; return 2; }
   done
-  for r in "$@"; do
-    find "$t/$r" -type f -print
-  done | LC_ALL=C sort > "$FROZEN.list"
+  # Symlinks too, not only regular files. `git apply` creates mode-120000 entries
+  # and pytest loads a conftest.py through one; a `-type f` listing never saw it,
+  # so a symlinked addition passed the gate with the manifest unchanged.
+  # Every .gitignore in the tree as well, wherever it lives: the ignore filter
+  # below reads them, and a candidate that edits the root .gitignore to cover its
+  # addition has touched nothing under a frozen root — the addition then drops out
+  # as a "build artifact". Both measured against this block, both caught now.
+  { for r in "$@"; do
+      find "$t/$r" \( -type f -o -type l \) -print
+    done
+    find "$t" -name .gitignore -not -path "$t/.git/*" -print
+  } | LC_ALL=C sort -u > "$FROZEN.list"
   # Drop anything git ignores. Measured on the first real run of this route:
   # without it the gate fires on the __pycache__/*.pyc the oracle's own
   # execution wrote beside itself, and reports it as a candidate tampering
@@ -134,7 +143,11 @@ frozen_manifest() {
       | sed "s|^|$t/|" > "$FROZEN.ign"
   fi
   grep -vxF -f "$FROZEN.ign" "$FROZEN.list" | while IFS= read -r f; do
-    printf '%s  %s\n' "$(git hash-object -- "$f")" "${f#"$t"/}"
+    # A symlink is recorded by its target string, never by the target's content:
+    # hash-object follows the link, so a link swapped to point elsewhere would
+    # hash as "unchanged" whenever the new target has the old bytes.
+    if [ -L "$f" ]; then printf 'link:%s  %s\n' "$(readlink -- "$f")" "${f#"$t"/}"
+    else printf '%s  %s\n' "$(git hash-object -- "$f")" "${f#"$t"/}"; fi
   done
 }
 

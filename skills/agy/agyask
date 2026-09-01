@@ -285,6 +285,12 @@ except Exception:
     jsonl = bool(lines) and all(_ok(l) for l in lines)
     sys.exit(4 if jsonl or not raw.startswith("{") else 3)
 if not isinstance(j, dict) or not isinstance(j.get("response"), str):
+    # One object with an agy status/error field and no response is agy reporting a
+    # failure, not an answer: passing it through printed {"status":"ERROR",...} as
+    # the review with exit 0. A receipt line, a DesignPacket or a finding array has
+    # neither key and still passes through unchanged.
+    if isinstance(j, dict) and ("status" in j or "error" in j):
+        sys.exit(3)
     sys.exit(4)
 r = j["response"]
 if not r.strip():

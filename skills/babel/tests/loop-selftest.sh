@@ -112,6 +112,25 @@ frozen_check "$REPO2" tests >/dev/null 2>&1 &&
   { echo 'FAIL: the ignore filter swallowed a real addition'; exit 1; }
 rm "$REPO2/tests/conftest.py"
 
+# 3. a SYMLINKED addition. `git apply` creates mode-120000 entries, pytest loads a
+#    conftest.py through a symlink, and a listing built with `-type f` never sees it.
+ln -s "$TMP/fixtures.py" "$REPO2/tests/conftest.py"
+frozen_check "$REPO2" tests >/dev/null 2>&1 &&
+  { echo 'FAIL: a symlink added inside a frozen root passed the gate'; exit 1; }
+rm "$REPO2/tests/conftest.py"
+frozen_check "$REPO2" tests 2>/dev/null || { echo 'FAIL: tree rejected after the symlink was removed'; exit 1; }
+
+# 4. the ignore filter's own input is outside the frozen roots: a candidate that
+#    edits the root .gitignore to cover its addition has touched nothing frozen and
+#    hashed nothing new, and the addition is then filtered out as a build artifact.
+printf '__pycache__/\ntests/conftest.py\n' > "$REPO2/.gitignore"
+printf 'def bench(): return 1\n' > "$REPO2/tests/conftest.py"
+frozen_check "$REPO2" tests >/dev/null 2>&1 &&
+  { echo 'FAIL: an addition hidden by editing .gitignore passed the gate'; exit 1; }
+rm "$REPO2/tests/conftest.py"
+printf '__pycache__/\n' > "$REPO2/.gitignore"
+frozen_check "$REPO2" tests 2>/dev/null || { echo 'FAIL: tree rejected after .gitignore was restored'; exit 1; }
+
 # 2. an untracked oracle is a SETUP error (2), never a violation (1): a worktree
 # built from a commit would simply not contain it.
 printf 'x\n' > "$REPO2/tests/helper.py"
