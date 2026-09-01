@@ -329,6 +329,7 @@ J
 text) printf 'plain answer\n' ;;
 broken) printf '%s' '{"conversation_id":' ;;
 errenv) printf '%s' '{"status":"ERROR","error":"quota exceeded"}' ;;
+errresp) printf '%s' '{"status":"ERROR","response":"quota exceeded"}' ;;
 esac
 STUB
       chmod +x "$_stub"
@@ -340,6 +341,7 @@ STUB
       _u3=$(_usage badusage '"total_tokens":null')   # usage present but not an object
       _o4=$(_run jsonl); _o5=$(_run text); _o6=$(_run broken); _o7=$(_run jsonlnone)
       _o8=$(_run errenv)   # an agy error envelope with exit 0 is not an answer either
+      _o9=$(_run errresp)  # nor is one that carries text under a non-SUCCESS status
       rm -f "$_stub"
       # The jsonl case is the one that matters most: a real review answer starts
       # with `{"receipt":…}`, so an agy build that ignores --output-format returns
@@ -349,14 +351,14 @@ STUB
 line2" ] \
          && [ "$_u1" -ge 1 ] && [ "$_u2" -ge 1 ] && [ "$_u3" -ge 1 ] \
          && [ "${_o4#\{\"receipt\"}" != "$_o4" ] && [ "${_o4%\"evidence\"]}" != "$_o4" ] \
-         && [ "$_o5" = "plain answer" ] && [ -z "$_o6" ] && [ -z "$_o8" ] \
+         && [ "$_o5" = "plain answer" ] && [ -z "$_o6" ] && [ -z "$_o8" ] && [ -z "$_o9" ] \
          && [ "${_o7##*
 }" = "NONE" ]; then
         ok "agyask usage reporting holds (envelope unwrapped, finding-jsonl and receipt+NONE passed through, plain text unchanged, garbage refused, usage null when unavailable)"
         pass=$((pass+1))
       else
-        printf '  [FAIL] agyask usage self-check: contract broken (envelope=%s usage=%s null=%s badusage=%s jsonl=%s text=%s garbage_stdout=%s clean_none=%s error_envelope_stdout=%s)\n' \
-          "$_o1" "$_u1" "$_u2" "$_u3" "$_o4" "$_o5" "$_o6" "$_o7" "$_o8"
+        printf '  [FAIL] agyask usage self-check: contract broken (envelope=%s usage=%s null=%s badusage=%s jsonl=%s text=%s garbage_stdout=%s clean_none=%s error_envelope_stdout=%s error_status_stdout=%s)\n' \
+          "$_o1" "$_u1" "$_u2" "$_u3" "$_o4" "$_o5" "$_o6" "$_o7" "$_o8" "$_o9"
         exit 1
       fi
       else

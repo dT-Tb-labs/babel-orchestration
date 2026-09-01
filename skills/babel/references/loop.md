@@ -61,7 +61,7 @@ Write it to `.babel/<task>/loop.md` and treat it as SoT for the run (`protocol.m
 | `oracle` | the exact command, its cwd, its measured per-run seconds, and its **baseline reading** | see §L2 — a loop that never measured its start cannot report improvement afterwards |
 | `invariants` | what stays true regardless of the metric: paths that must not change, tests that must stay green, behaviour that must not move | this is the anti-gaming boundary (§L3) and the user is the only party who can draw it |
 
-And three the lead may draft and have confirmed rather than asked cold: `budget` (max iterations, max oracle runs, token ceiling), `held_out` (§L3), `frozen` (§L2 — defaults to the oracle, its inputs, every test file, **and the build/lint configuration cascade stage 3 executes** — `Makefile`, `package.json`, `pyproject.toml`, `setup.cfg`, `tox.ini`, `.pre-commit-config.yaml`, lint configs; a candidate that edits the build script has put its own code in front of the shell — which is usually right and must still be shown. Files are valid frozen roots, not only directories).
+And three the lead may draft and have confirmed rather than asked cold: `budget` (max iterations, max oracle runs, token ceiling), `held_out` (§L3), `frozen` (§L2 — defaults to the oracle, its inputs, every test file, **and the build/lint configuration cascade stage 3 executes** — `Makefile`, `package.json`, `pyproject.toml`, `setup.cfg`, `tox.ini`, `.pre-commit-config.yaml`, lint configs, **and every script or plugin those files invoke** (`scripts/build.sh`, a `conftest.py`, a lint plugin) — the gate freezes what it is told, so a config that calls an unfrozen script has an unfrozen build; a candidate that edits the build script has put its own code in front of the shell — which is usually right and must still be shown. Files are valid frozen roots, not only directories).
 
 `metric` and `target` together are the loop's whole objective function. If the user cannot state a target, that is not a charter to complete with a placeholder — it is evidence that predicate 4 failed and the task wants a `linear` route with a review, which is worth saying rather than looping.
 
@@ -119,11 +119,11 @@ frozen_manifest() {
   # below reads them, and a candidate that edits the root .gitignore to cover its
   # addition has touched nothing under a frozen root — the addition then drops out
   # as a "build artifact". Both measured against this block, both caught now.
-  { for r in "$@"; do
-      find "$t/$r" \( -type f -o -type l \) -print
-    done
-    find "$t" -name .gitignore -not -path "$t/.git/*" -print
-  } | LC_ALL=C sort -u > "$FROZEN.list"
+  # -H: a frozen root that is itself a symlink is followed, so the files behind it
+  # are what gets hashed — without it find lists the link and nothing else.
+  for r in "$@"; do
+    find -H "$t/$r" \( -type f -o -type l \) -print
+  done | LC_ALL=C sort > "$FROZEN.list"
   # Drop anything git ignores. Measured on the first real run of this route:
   # without it the gate fires on the __pycache__/*.pyc the oracle's own
   # execution wrote beside itself, and reports it as a candidate tampering
@@ -142,7 +142,12 @@ frozen_manifest() {
     git -C "$t" ls-files --others --ignored --exclude-standard \
       | sed "s|^|$t/|" > "$FROZEN.ign"
   fi
-  grep -vxF -f "$FROZEN.ign" "$FROZEN.list" | while IFS= read -r f; do
+  # The .gitignore files join AFTER the ignore filter, never through it: a new
+  # nested .gitignore that ignores itself would otherwise drop out of the listing
+  # together with whatever it hides (found by review of the first fix).
+  { grep -vxF -f "$FROZEN.ign" "$FROZEN.list"
+    find "$t" -name .gitignore -not -path "$t/.git/*" -print
+  } | LC_ALL=C sort -u | while IFS= read -r f; do
     # A symlink is recorded by its target string, never by the target's content:
     # hash-object follows the link, so a link swapped to point elsewhere would
     # hash as "unchanged" whenever the new target has the old bytes.

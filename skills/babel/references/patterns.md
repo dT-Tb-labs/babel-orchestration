@@ -27,7 +27,7 @@ Used in Phase 1 (design). Run only when triage classifies the task as M/L. For S
 Write the payload to `.babel/<task>/inbox/design-req.json` and have SOL read it via `--cwd` (protocol.md §3, to avoid the argv limit). Do not use protocol.md pointers with SOL; embed the output format inline each time (protocol.md §11).
 
 ```bash
-grep -rnEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"'[:space:]]*[:=]' .babel/<task>/inbox/design-req.json .babel/<task>/spec.md && { echo 'secret pattern in the design payload — mask before dispatch (protocol.md §0)' >&2; exit 1; }
+grep -rnEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=-]{16,}' .babel/<task>/inbox/design-req.json .babel/<task>/spec.md && { echo 'secret pattern in the design payload — mask before dispatch (protocol.md §0)' >&2; exit 1; }
 solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON." > .babel/<task>/results/design-sol.raw 2> .babel/<task>/results/design-sol.err
 ```
 
@@ -47,7 +47,7 @@ Output DesignPacket JSON only, no prose. Do not use any tools — answer directl
 
 ```bash
 [ "$(wc -c < .babel/<task>/inbox/agy-design.txt)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
-grep -nEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"'[:space:]]*[:=]' .babel/<task>/inbox/agy-design.txt && { echo 'secret pattern in the design payload — mask before dispatch (protocol.md §0)' >&2; exit 1; }
+grep -nEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=-]{16,}' .babel/<task>/inbox/agy-design.txt && { echo 'secret pattern in the design payload — mask before dispatch (protocol.md §0)' >&2; exit 1; }
 AGY_PRINT_TIMEOUT=180s agyask "$(cat .babel/<task>/inbox/agy-design.txt)" > .babel/<task>/results/design-agy.raw 2> .babel/<task>/results/design-agy.err
 ```
 
@@ -132,7 +132,7 @@ gets its own file — the bytes above the token line are identical, so this cost
 ```bash
 : > "$TOKENS"          # per round, never appended across retries: a stale token from
                        # an earlier attempt would still validate a replayed response
-CHANNELS='claude sol agy'   # only what this scale dispatches: S = claude; M/L = all three (SKILL.md Phase 0)
+CHANNELS='<claude | claude sol agy>'   # placeholder like <N>: S = claude only; M/L = all three (SKILL.md Phase 0)
 for ch in $CHANNELS; do
   # Round 1 dispatches the changeset; from round 2 each channel gets its OWN delta,
   # so resolve $SRC per channel. A constant here is the defect A6's header warns
@@ -171,7 +171,7 @@ for ch in $CHANNELS; do
     "$(shasum -a 256 "$P" | cut -c1-16)" >> "$TOKENS"   # 4th field = args.digest (§A6)
   # Secret scan before anything external reads it (SKILL.md Safety, protocol.md §0).
   # A hit stops the dispatch; mask or drop the hunk and tell the user what was withheld.
-  grep -nEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"'[:space:]]*[:=]' "$P" \
+  grep -nEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=-]{16,}' "$P" \
     && { echo "secret pattern in $P — mask it before dispatching $ch" >&2; exit 1; }
 done
 ```

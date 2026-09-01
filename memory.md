@@ -45,7 +45,7 @@ had just written** — round 1 took an external finding's *conclusion* instead o
 **Fable 5.1 full audit (2026-09-02)** — `.babel/AUDIT-2026-09-02.md` (gitignored). Confirmed: loop.md frozen-set
 gate bypassed by symlink conftest and by editing root `.gitignore` (H1); cdx-sol offload false-FAIL under a symlinked
 `--cwd` (M1); agyask prints an agy error envelope as an answer (M2); §7 gate opens `.npmrc`/`.netrc` (M4). 16 doc
-contradictions (D1-D16). H1+M1-M5 FIXED (each with a RED-first test, mutation-checked); H2 and D1-D16 open.
+contradictions (D1-D16). All fixed + committed; SOL review (normal, 474k tokens) found 3 real holes in the first fix — fixed, tested.
 
 ## 次のタスク / 未解決
 
