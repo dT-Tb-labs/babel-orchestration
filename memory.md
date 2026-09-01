@@ -40,12 +40,12 @@ an unknown id exits 1 with the model list, no silent fallback. Verified by askin
 here. Passed the M gate over 2 rounds; round 2 found 3 H defects, **every one in a line round 1's fix
 had just written** — round 1 took an external finding's *conclusion* instead of re-deriving it.
 
-**qwen audit of `skills/babel/tests/` (08-27)** — 12 calls (`review` + `silent-failure` x 3 language
-bundles x 2 runs), 19 raw findings, **0 confirmed defects**. The top-5 clusters all trace to
-deliberate design whose reason is in a comment directly above the quoted line. Recorded because a
-clean result is worth exactly as much as a dirty one and stops the next reader re-running it.
-Outputs: `~/Claude/.babel/qwen-audit/`. Docs NOT audited — cross-file rule contradictions need
-SOL/agy or the lead, not qwen.
+**qwen audit of `skills/babel/tests/` (08-27)** — 12 calls, 19 raw, **0 confirmed** (all deliberate design). `~/Claude/.babel/qwen-audit/`.
+
+**Fable 5.1 full audit (2026-09-02)** — `.babel/AUDIT-2026-09-02.md` (gitignored). Confirmed: loop.md frozen-set
+gate bypassed by symlink conftest and by editing root `.gitignore` (H1); cdx-sol offload false-FAIL under a symlinked
+`--cwd` (M1); agyask prints an agy error envelope as an answer (M2); §7 gate opens `.npmrc`/`.netrc` (M4). 16 doc
+contradictions (D1-D16). H1+M1-M5 FIXED (each with a RED-first test, mutation-checked); H2 and D1-D16 open.
 
 ## 次のタスク / 未解決
 

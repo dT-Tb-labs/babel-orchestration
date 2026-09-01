@@ -33,11 +33,15 @@ skills/
     references/protocol.md # AI-to-AI wire format (packets, blackboard, degradation)
     references/patterns.md # per-phase playbooks (debate / build-debug / acceptance-gate)
     references/loop.md     # route selection + loop engineering (oracle, cascade, frozen set)
+    references/advanced.md # L acceptance script (A6), inter-round delta, stuck playbook, channel adaptation — required
+    tests/                 # self-tests over the fenced code blocks above (run-all.sh; CI runs it --strict)
   cdx-sol/
     SKILL.md
     cdx-sol.mjs            # background+poll wrapper around codex-companion (Node, no deps)
+    solask                 # shim installed to ~/.local/bin — the name babel calls
   agy/
     SKILL.md
+    agyask                 # shim installed to ~/.local/bin — the name babel calls
     agy_pty_wrapper.py     # cross-platform PTY wrapper for agy bug #76 (pywinpty / ptyprocess)
 ```
 
@@ -109,10 +113,13 @@ Or copy manually:
 
 ```bash
 cp -r skills/babel  skills/cdx-sol  skills/agy  ~/.claude/skills/
+install -m 755 skills/agy/agyask skills/cdx-sol/solask ~/.local/bin/   # the shims every template calls by name
 ```
 
 The internal references use portable `$HOME/.claude/skills/...` paths, so no
-editing is needed as long as all three live under `~/.claude/skills/`.
+editing is needed as long as all three live under `~/.claude/skills/`. Without
+the second line both external channels are dead: babel invokes `agyask` and
+`solask` by bare name, and `install.sh` is what normally puts them on `PATH`.
 
 **Minimal setup:** only `babel` + Claude Code is required. `cdx-sol` and `agy`
 are optional independent-review channels — babel runs with whatever you have and
@@ -138,12 +145,13 @@ Then invoke from Claude Code:
 - Node.js
 - OpenAI Codex CLI / `openai-codex` plugin installed under
   `~/.claude/plugins/cache/openai-codex/codex/` (or point `CDX_SOL_COMPANION`
-  at `codex-companion.mjs` directly)
+  at `codex-companion.mjs` on a direct `node cdx-sol.mjs` call — `solask`
+  refuses that override, since it runs outside the sandbox)
 - A ChatGPT subscription authenticated via `codex login`
 - Self-test: `node skills/cdx-sol/cdx-sol.mjs --selftest`
 
 **agy** (optional channel, cross-platform):
-- Google Antigravity CLI (`agy`) installed and `agy auth login` completed
+- Google Antigravity CLI (`agy`) installed and signed in (run `agy` interactively once; there is no `agy auth` subcommand)
 - Python 3.x + a PTY backend: `pywinpty` on Windows, `ptyprocess` on
   Linux/macOS (`pip install pywinpty` / `pip install ptyprocess`)
 - The wrapper picks the backend per-OS automatically (Windows ConPTY via
@@ -191,7 +199,9 @@ payloads are untrusted input.
 cannot edit files or run commands even when a reviewed hunk contains text aimed
 at it. Both shims resolve the executable they run from a fixed list of absolute
 paths and never search `PATH`, so a planted `agy` or `node` cannot ride the
-exclusion. `solask` refuses `--allow-write` and `CDX_SOL_COMPANION` outright:
+exclusion — with one documented exception: when the agy venv is absent, agyask's
+PTY fallback runs whatever `python3` is on `PATH`, and that interpreter sees the
+prompt. Keep the venv (install.sh creates it) if that matters to you. `solask` refuses `--allow-write` and `CDX_SOL_COMPANION` outright:
 write mode and companion overrides go through a direct `node .../cdx-sol.mjs`
 call, which stays inside the sandbox and prompts. Both shims are short and worth
 reading before you exempt them.

@@ -17,7 +17,7 @@ solask --tier <quick|normal|deep> --cwd "<repo-abs-path>" "<prompt>"
 
 Use Bash tool `timeout: 600000` (10 min). The wrapper launches a background Codex job, polls internally, and prints only SOL's final answer — one round-trip, no progress spam. Read-only sandbox by default.
 
-The wrapper's own ~9 min poll cap (`WALL_CAP_MS`) is what actually bounds the call: with `run_in_background: true` the Bash `timeout` is ignored (measured), so the 600000 above applies only to a foreground call. Past ~9 min the wrapper prints `SOL_STILL_RUNNING` and returns. **The Codex job it leaves behind is not killed** — that is deliberate (re-attach with `--attach`), but abandoned jobs accumulate as live `codex` processes. Kill them by PID when a run is truly done with them.
+The wrapper's own ~9 min poll cap (`WALL_CAP_MS`) is what actually bounds the call: with `run_in_background: true` the Bash `timeout` is ignored (measured), so the 600000 above applies only to a foreground call. Past ~9 min the wrapper prints `SOL_STILL_RUNNING` and exits **3** (not 0: an unfinished job must not read as a completed review to a caller that only checks the status). **The Codex job it leaves behind is not killed** — that is deliberate (re-attach with `--attach`), but abandoned jobs accumulate as live `codex` processes. Kill them by PID when a run is truly done with them.
 
 ## Token discipline (why this skill exists)
 
@@ -63,7 +63,7 @@ node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --allow-write --cw
 | Job `status=failed` | Read the trailing `[SOL job ... status=failed]` line + the printed text for the Codex error. |
 | Empty output | Auth may have lapsed: run `codex login` in a terminal, then retry. |
 | Wrong workspace / can't see files | Pass the correct absolute `--cwd`; SOL's sandbox and file view follow it. |
-| `No openai-codex plugin version found` | Plugin cache dir missing/moved. Set `CDX_SOL_COMPANION` env var to the `codex-companion.mjs` path directly (COMPANION otherwise auto-resolves the latest installed plugin version under `~/.claude/plugins/cache/openai-codex/codex/`). |
+| `No openai-codex plugin version found` | Plugin cache dir missing/moved. Set `CDX_SOL_COMPANION` env var to the `codex-companion.mjs` path on a **direct** `node .../cdx-sol.mjs` call — `solask` refuses the override with exit 3, because it runs outside the sandbox and would execute an arbitrary path (COMPANION otherwise auto-resolves the latest installed plugin version under `~/.claude/plugins/cache/openai-codex/codex/`). |
 
 ## Self-check
 
