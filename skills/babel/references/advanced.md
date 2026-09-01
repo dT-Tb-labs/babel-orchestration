@@ -109,7 +109,7 @@ packet pointing at it:
 
 ```bash
 git diff <previous milestone ref> > .babel/<task>/inbox/checkpoint-r<N>.diff
-grep -nEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"'[:space:]]*[:=]' .babel/<task>/inbox/checkpoint-r<N>.diff && { echo 'secret pattern in the checkpoint diff — mask before dispatch (protocol.md §0)' >&2; exit 1; }
+grep -nEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=-]{16,}' .babel/<task>/inbox/checkpoint-r<N>.diff && { echo 'secret pattern in the checkpoint diff — mask before dispatch (protocol.md §0)' >&2; exit 1; }
 ```
 ```json
 {"goal":"spec-drift and bug check at milestone <N>",

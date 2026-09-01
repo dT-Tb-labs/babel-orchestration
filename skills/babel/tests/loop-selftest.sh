@@ -131,6 +131,28 @@ rm "$REPO2/tests/conftest.py"
 printf '__pycache__/\n' > "$REPO2/.gitignore"
 frozen_check "$REPO2" tests 2>/dev/null || { echo 'FAIL: tree rejected after .gitignore was restored'; exit 1; }
 
+# 5. a NEW nested .gitignore that ignores itself and the addition: the ignore
+#    filter ran on the candidate tree, so both dropped out before hashing. Found
+#    by SOL's review of the first fix.
+printf '.gitignore\nconftest.py\n' > "$REPO2/tests/.gitignore"
+printf 'def bench(): return 1\n' > "$REPO2/tests/conftest.py"
+frozen_check "$REPO2" tests >/dev/null 2>&1 &&
+  { echo 'FAIL: a self-ignoring nested .gitignore hid an addition from the gate'; exit 1; }
+rm "$REPO2/tests/.gitignore" "$REPO2/tests/conftest.py"
+frozen_check "$REPO2" tests 2>/dev/null || { echo 'FAIL: tree rejected after the nested .gitignore was removed'; exit 1; }
+
+# 6. a frozen root that is itself a symlink: without -H, find lists the link and
+#    nothing behind it, so edits through the target never change the manifest.
+mkdir "$TMP/realroot"; cp "$REPO2/tests/oracle.py" "$TMP/realroot/"
+ln -s "$TMP/realroot" "$REPO2/linkroot"
+FROZEN=$TMP/blackboard/f3.manifest
+frozen_record "$REPO2" linkroot || { echo 'FAIL: frozen_record failed on a symlinked root'; exit 1; }
+printf 'def test(): assert 0\n' > "$TMP/realroot/oracle.py"
+frozen_check "$REPO2" linkroot >/dev/null 2>&1 &&
+  { echo 'FAIL: an edit behind a symlinked frozen root passed the gate'; exit 1; }
+rm "$REPO2/linkroot"
+FROZEN=$TMP/blackboard/f2.manifest
+
 # 2. an untracked oracle is a SETUP error (2), never a violation (1): a worktree
 # built from a commit would simply not contain it.
 printf 'x\n' > "$REPO2/tests/helper.py"

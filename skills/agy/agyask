@@ -293,6 +293,13 @@ if not isinstance(j, dict) or not isinstance(j.get("response"), str):
         sys.exit(3)
     sys.exit(4)
 r = j["response"]
+# An envelope that reports a failure is not an answer even when it carries text:
+# {"status":"ERROR","response":"quota exceeded"} printed "quota exceeded" as the
+# review with exit 0 (found by review of the first fix). Only SUCCESS passes.
+st = j.get("status")
+if j.get("error") or (isinstance(st, str) and st.upper() != "SUCCESS"):
+    sys.stderr.write("agyask: agy reported status=%r error=%r — not an answer.\n" % (st, j.get("error")))
+    sys.exit(3)
 if not r.strip():
     sys.exit(5)                         # envelope, empty answer -> treat as no output
 sys.stdout.write(r)
