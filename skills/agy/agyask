@@ -84,6 +84,17 @@ if [ "${AGY_TOOLS:-0}" != "1" ]; then
 
 Do not use any tools — answer directly from the text given above."
 fi
+# The workspace agy is shown. `--mode plan --sandbox` stop edits and commands, but
+# reads under --add-dir stay permitted, and the no-tools sentence above is an
+# instruction, not a control: a hostile hunk could ask agy to read $PWD/.env and
+# quote it back. So the workspace is an EMPTY directory unless the caller opted
+# into tools with AGY_TOOLS=1 — agy still needs some workspace ("No active
+# workspace is set." otherwise), it just gets one with nothing in it.
+if [ "${AGY_TOOLS:-0}" = "1" ]; then
+  AGY_DIR=$PWD
+else
+  AGY_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agyask-ws.XXXXXX") || exit 3
+fi
 
 # Resolve agy to a path we choose, not to whatever PATH happens to name. agyask
 # runs OUTSIDE the Claude Code sandbox (sandbox.excludedCommands), so an `agy`
@@ -184,19 +195,21 @@ agy_err=$(mktemp "${TMPDIR:-/tmp}/agyask-err.XXXXXX") || { rm -f "$agy_out"; exi
 # INT/TERM also kill the agy child: the shim exiting does not reap it, and an agy
 # left running under a dead parent is the orphan that later shows up as "out of
 # pty devices". `${agy_pid:-}` because the traps are armed before the spawn.
-trap 'rm -f "$agy_out" "$agy_err"' EXIT
+# The empty workspace is removed too; `ws_rm` is a no-op when the workspace is $PWD.
+ws_rm() { [ "$AGY_DIR" != "$PWD" ] && rmdir "$AGY_DIR" 2>/dev/null; :; }
+trap 'rm -f "$agy_out" "$agy_err"; ws_rm' EXIT
 # `${agy_pid:-0}` would have been catastrophic: kill(1) reads 0 as "every process
 # in my process group", so a signal arriving before the spawn would have taken the
 # caller down with it. Only signal a pid we actually have.
-trap '[ -n "${agy_pid:-}" ] && kill_tree "$agy_pid"; rm -f "$agy_out" "$agy_err"; exit 130' INT
-trap '[ -n "${agy_pid:-}" ] && kill_tree "$agy_pid"; rm -f "$agy_out" "$agy_err"; exit 143' TERM
+trap '[ -n "${agy_pid:-}" ] && kill_tree "$agy_pid"; rm -f "$agy_out" "$agy_err"; ws_rm; exit 130' INT
+trap '[ -n "${agy_pid:-}" ] && kill_tree "$agy_pid"; rm -f "$agy_out" "$agy_err"; ws_rm; exit 143' TERM
 # stdout is captured; stderr is captured only to be inspected for the
 # permission-abort line and is replayed verbatim afterwards, so agy's own
 # diagnostics still reach the caller exactly as they did before.
 # $AGY_JSON_ARGS is unquoted on purpose: it is either empty or the two fixed
 # tokens set above, never anything a caller supplies.
 # shellcheck disable=SC2086
-"$AGY_BIN" --model "${AGY_MODEL:-gemini-3.7-flash-high}" --mode plan --sandbox --add-dir "$PWD" --print-timeout "${budget_secs}s" $AGY_JSON_ARGS -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
+"$AGY_BIN" --model "${AGY_MODEL:-gemini-3.7-flash-high}" --mode plan --sandbox --add-dir "$AGY_DIR" --print-timeout "${budget_secs}s" $AGY_JSON_ARGS -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
 agy_pid=$!
 # Wall clock, not an iteration count: each loop pass costs a kill -0, a sleep and
 # scheduler latency, so counting passes overshoots on a loaded host and stalls
@@ -376,4 +389,8 @@ rm -f "$agy_err"
 # its resolution order treats PATH as authoritative — reopening, on the fallback
 # path only, exactly the planted-binary hole the AGY_BIN loop above closes. Both
 # paths must pin the same executable.
-exec "$PY" "$HOME/.claude/skills/agy/agy_pty_wrapper.py" --agy-path "$AGY_BIN" --timeout "$remaining" -- "$prompt"
+# `--add-dir "$AGY_DIR"`: the same workspace rule as the direct path — an empty
+# directory unless AGY_TOOLS=1 — or the fallback would reopen the tree the direct
+# path just closed. The PTY path cannot remove that directory afterwards (exec
+# never returns), so a fallback run leaves one empty temp dir behind.
+exec "$PY" "$HOME/.claude/skills/agy/agy_pty_wrapper.py" --agy-path "$AGY_BIN" --add-dir "$AGY_DIR" --timeout "$remaining" -- "$prompt"

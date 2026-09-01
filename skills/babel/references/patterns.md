@@ -138,9 +138,11 @@ for ch in $CHANNELS; do
   # so resolve $SRC per channel. A constant here is the defect A6's header warns
   # about in the other direction: every channel silently re-reviews round 1.
   SRC="$D"                                     # round 1
-  [ "<N>" -gt 1 ] && SRC=$(ls ".babel/<task>/inbox/delta-r<N>-$ch.diff" \
-                              ".babel/<task>/inbox/delta-r<N>.diff" 2>/dev/null | head -1)
-  [ -n "$SRC" ] || exit 1
+  if [ "<N>" -gt 1 ]; then                     # this channel's own delta wins, explicitly
+    SRC=".babel/<task>/inbox/delta-r<N>-$ch.diff"
+    [ -f "$SRC" ] || SRC=".babel/<task>/inbox/delta-r<N>.diff"
+  fi
+  [ -f "$SRC" ] || exit 1
   P=".babel/<task>/inbox/changeset-r<N>-$ch.diff"
   # `|| exit` is load-bearing: on a failed copy the appends below still succeed and
   # create a file whose only lines are tokens, so the channel receives an empty

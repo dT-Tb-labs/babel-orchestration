@@ -135,6 +135,7 @@ def main() -> int:
         help="Full path to the agy executable (default: auto-resolve per-OS via PATH and known locations)",
     )
     ap.add_argument("--print-timeout", default="3m", help="agy internal --print-timeout value")
+    ap.add_argument("--add-dir", default=os.getcwd(), help="workspace shown to agy (agyask passes an empty dir unless AGY_TOOLS=1)")
     ap.add_argument("--model", default=os.environ.get("AGY_MODEL", "gemini-3.7-flash-high"), help="Model to use (passed as agy --model)")
     args = ap.parse_args()
 
@@ -152,7 +153,7 @@ def main() -> int:
     # i.e. when things are already going wrong. --add-dir mirrors agyask too:
     # agy answers "No active workspace is set." without a workspace.
     cmd = [
-        agy_path, "--mode", "plan", "--sandbox", "--add-dir", os.getcwd(),
+        agy_path, "--mode", "plan", "--sandbox", "--add-dir", args.add_dir,
         "--print-timeout", args.print_timeout, "-p", args.prompt,
     ]
     if args.model:

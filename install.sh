@@ -119,7 +119,9 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
       # Remove files the source no longer has, after the new ones are in place.
       (cd "$DEST/$s" && find . -type f) | while IFS= read -r f; do
         rel=${f#./}
-        case "$rel" in .*|*/.*) continue ;; esac
+        # Skip only this installer's own in-flight temp names; every other file,
+        # dotted or not, was copied from the source and is pruned like the rest.
+        case "$rel" in *.tmp.[0-9]*) continue ;; esac
         [ -f "$SRC_DIR/$s/$rel" ] || rm -f "$DEST/$s/$rel"
       done
       ok "copied $s"

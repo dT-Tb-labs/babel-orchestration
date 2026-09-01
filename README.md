@@ -197,7 +197,8 @@ payloads are untrusted input.
 
 **What still constrains them.** `agyask` pins `--mode plan --sandbox`, so agy
 cannot edit files or run commands even when a reviewed hunk contains text aimed
-at it. Both shims resolve the executable they run from a fixed list of absolute
+at it, and it shows agy an empty workspace unless `AGY_TOOLS=1`, so it cannot
+read your tree either. Both shims resolve the executable they run from a fixed list of absolute
 paths and never search `PATH`, so a planted `agy` or `node` cannot ride the
 exclusion — with one documented exception: when the agy venv is absent, agyask's
 PTY fallback runs whatever `python3` is on `PATH`, and that interpreter sees the

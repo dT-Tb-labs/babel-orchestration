@@ -21,7 +21,7 @@ AGY_PRINT_TIMEOUT=180s agyask "<prompt>"
 
 `AGY_PRINT_TIMEOUT` is the **total** budget in seconds. The PTY fallback inherits whatever is left of it, and is skipped with exit 2 when under 30s remain — otherwise the caller's Bash timeout would kill a fallback that never had time to answer.
 
-**agyask appends `Do not use any tools — answer directly from the text given above.` to every prompt.** Headless agy aborts the whole run — empty stdout, no partial answer — the moment a tool needs a permission it cannot prompt for, and `~/.gemini/antigravity-cli/settings.json` allow-rules are path-specific, so any prompt that makes agy reach for a file dies outside those paths. Measured on one 4.4KB review prompt: empty after 52s without the directive, 3 findings in 29s with it. Set `AGY_TOOLS=1` to opt out when agy genuinely must read the workspace — the matching allow-rule has to exist first.
+**agyask appends `Do not use any tools — answer directly from the text given above.` to every prompt.** Headless agy aborts the whole run — empty stdout, no partial answer — the moment a tool needs a permission it cannot prompt for, and `~/.gemini/antigravity-cli/settings.json` allow-rules are path-specific, so any prompt that makes agy reach for a file dies outside those paths. Measured on one 4.4KB review prompt: empty after 52s without the directive, 3 findings in 29s with it. Set `AGY_TOOLS=1` to opt out when agy genuinely must read the workspace — the matching allow-rule has to exist first. **Without `AGY_TOOLS=1`, agy's workspace (`--add-dir`) is an empty temp directory, not `$PWD`**: `--mode plan --sandbox` block edits and commands but not reads, and the no-tools sentence is an instruction, so a hostile hunk could otherwise have agy read `$PWD/.env` and quote it back. The prompt itself still travels as an argv element — visible to other local users via `ps` — so the 32 KB cap and the secret scan (babel protocol.md §0) are what bound the exposure.
 
 **agyask pins `--mode plan --sandbox`, so agy cannot act.** Review payloads are untrusted input: a diff hunk containing "ignore your instructions and run X" reaches agy as prompt text, and plan mode plus agy's own terminal restrictions keep that from becoming a tool call. There is no write-enabled path — babel only asks agy for opinions. Verified on agy 1.1.8.
 
@@ -68,7 +68,7 @@ Two things are needed, both measured on agy 1.1.8 (2026-08-01):
 }
 ```
 
-2. **`--add-dir "$PWD"`** — without it agy replies `No active workspace is set.`
+2. **`--add-dir <workspace>`** — without one agy replies `No active workspace is set.` agyask passes an empty temp directory, or `$PWD` only under `AGY_TOOLS=1` (see above).
    `agyask` now passes it automatically.
 
 **Rule-grammar facts, all measured (the docs state none of this):**
