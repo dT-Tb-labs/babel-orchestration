@@ -307,9 +307,17 @@ PYEOF
 #!/bin/sh
 case "$STUB_CASE" in
 ok) cat <<'J'
-{"status":"SUCCESS","response":"line1\nline2\n","usage":{"total_tokens":12}}
+{"event":"init","conversation_id":"c1"}
+{"event":"step_update","step_update":{"state":"DONE","text_delta":"line1\n"}}
+{"event":"result","result":{"status":"SUCCESS","response":"line1\nline2\n","usage":{"total_tokens":12}}}
 J
 ;;
+structured) cat <<'J'
+{"event":"init","conversation_id":"c1"}
+{"event":"result","result":{"status":"SUCCESS","response":"```json\n{\"a\":1}\n```\n{\"a\":1,\"toolAction\":\"x\"}","structured_output":{"a":1,"b":["x"]},"usage":{"total_tokens":5}}}
+J
+;;
+noresult) printf '%s\n' '{"event":"init","conversation_id":"c1"}' ;;
 nousage) cat <<'J'
 {"status":"SUCCESS","response":"hi"}
 J
@@ -344,6 +352,8 @@ STUB
       _o4=$(_run jsonl); _o5=$(_run text); _o6=$(_run broken); _o7=$(_run jsonlnone)
       _o8=$(_run errenv)   # an agy error envelope with exit 0 is not an answer either
       _o9=$(_run errresp)  # nor is one that carries text under a non-SUCCESS status
+      _o10=$(_run noresult)                          # a stream that never reaches `result` is no answer
+      _o11=$(AGY_SCHEMA="$_stub" _run structured)    # under a schema, structured_output is printed, not the fenced response
       rm -f "$_stub"
       # The jsonl case is the one that matters most: a real review answer starts
       # with `{"receipt":…}`, so an agy build that ignores --output-format returns
@@ -354,13 +364,14 @@ line2" ] \
          && [ "$_u1" -ge 1 ] && [ "$_u2" -ge 1 ] && [ "$_u3" -ge 1 ] \
          && [ "${_o4#\{\"receipt\"}" != "$_o4" ] && [ "${_o4%\"evidence\"]}" != "$_o4" ] \
          && [ "$_o5" = "plain answer" ] && [ -z "$_o6" ] && [ -z "$_o8" ] && [ -z "$_o9" ] \
+         && [ -z "$_o10" ] && [ "$_o11" = '{"a": 1, "b": ["x"]}' ] \
          && [ "${_o7##*
 }" = "NONE" ]; then
         ok "agyask usage reporting holds (envelope unwrapped, finding-jsonl and receipt+NONE passed through, plain text unchanged, garbage refused, usage null when unavailable)"
         pass=$((pass+1))
       else
-        printf '  [FAIL] agyask usage self-check: contract broken (envelope=%s usage=%s null=%s badusage=%s jsonl=%s text=%s garbage_stdout=%s clean_none=%s error_envelope_stdout=%s error_status_stdout=%s)\n' \
-          "$_o1" "$_u1" "$_u2" "$_u3" "$_o4" "$_o5" "$_o6" "$_o7" "$_o8" "$_o9"
+        printf '  [FAIL] agyask usage self-check: contract broken (envelope=%s usage=%s null=%s badusage=%s jsonl=%s text=%s garbage_stdout=%s clean_none=%s error_envelope_stdout=%s error_status_stdout=%s noresult_stdout=%s structured=%s)\n' \
+          "$_o1" "$_u1" "$_u2" "$_u3" "$_o4" "$_o5" "$_o6" "$_o7" "$_o8" "$_o9" "$_o10" "$_o11"
         exit 1
       fi
       else

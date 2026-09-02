@@ -128,7 +128,28 @@ fi
 # which is the documented correct outcome for an unavailable usage record.
 USAGE_PY="$HOME/.local/share/babel/agy-venv/bin/python3"
 [ -x "$USAGE_PY" ] || USAGE_PY="$HOME/.local/share/babel/agy-venv/Scripts/python.exe"
-if [ -x "$USAGE_PY" ]; then AGY_JSON_ARGS="--output-format json"; else AGY_JSON_ARGS=""; fi
+# With the venv present the prompt travels on STDIN as one stream-json message,
+# not as an argv element (measured on agy 1.1.23: 3/3 stable, a 40 KB prompt
+# accepted, stdout intact despite upstream #76 — the message is written whole and
+# stdin closed before agy starts reading). That removes the `ps` exposure and the
+# ARG_MAX ceiling of the argv form. The reply is a stream of events; the parser
+# below takes the final `result` event, whose body is the same envelope
+# `--output-format json` returns.
+# AGY_SCHEMA=<json-schema file> adds --json-schema and prints the envelope's
+# `structured_output` (clean JSON) instead of `response` (which under a schema
+# comes back as a fenced blob plus a raw copy — measured, not usable as text).
+if [ -x "$USAGE_PY" ]; then AGY_JSON_ARGS="--input-format stream-json --output-format stream-json"; else AGY_JSON_ARGS=""; fi
+if [ -n "${AGY_SCHEMA:-}" ]; then
+  if [ -z "$AGY_JSON_ARGS" ]; then
+    printf 'agyask: AGY_SCHEMA needs the agy venv python (structured output arrives inside a JSON envelope). Run install.sh.\n' >&2
+    exit 3
+  fi
+  if [ ! -r "$AGY_SCHEMA" ]; then
+    printf 'agyask: AGY_SCHEMA=%s is not a readable file.\n' "$AGY_SCHEMA" >&2
+    exit 3
+  fi
+  AGY_JSON_ARGS="$AGY_JSON_ARGS --json-schema $AGY_SCHEMA"
+fi
 
 started=$(date +%s)
 # The budget is enforced here, not delegated. Two reasons it cannot be delegated:
@@ -206,11 +227,24 @@ trap '[ -n "${agy_pid:-}" ] && kill_tree "$agy_pid"; rm -f "$agy_out" "$agy_err"
 # stdout is captured; stderr is captured only to be inspected for the
 # permission-abort line and is replayed verbatim afterwards, so agy's own
 # diagnostics still reach the caller exactly as they did before.
-# $AGY_JSON_ARGS is unquoted on purpose: it is either empty or the two fixed
-# tokens set above, never anything a caller supplies.
-# shellcheck disable=SC2086
-"$AGY_BIN" --model "${AGY_MODEL:-gemini-3.7-flash-high}" --mode plan --sandbox --add-dir "$AGY_DIR" --print-timeout "${budget_secs}s" $AGY_JSON_ARGS -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
-agy_pid=$!
+# $AGY_JSON_ARGS is unquoted on purpose: it is either empty or the fixed tokens
+# set above plus an AGY_SCHEMA path the caller chose (so a path with spaces in it
+# would split — refuse that rather than quote around it, since the rest of the
+# string must stay word-split).
+case "${AGY_SCHEMA:-}" in *[[:space:]]*) printf 'agyask: AGY_SCHEMA path must not contain whitespace.\n' >&2; exit 3 ;; esac
+if [ -n "$AGY_JSON_ARGS" ]; then
+  # One NDJSON message on stdin; -p "" keeps agy in print mode. The message is
+  # built by the venv python, the only JSON writer this shim trusts (see above).
+  agy_in=$(mktemp "${TMPDIR:-/tmp}/agyask-in.XXXXXX") || exit 3
+  printf '%s' "$prompt" | "$USAGE_PY" -c 'import json,sys; print(json.dumps({"event":"user","message":{"role":"user","content":sys.stdin.read()}}))' > "$agy_in"
+  # shellcheck disable=SC2086
+  "$AGY_BIN" --model "${AGY_MODEL:-gemini-3.7-flash-high}" --mode plan --sandbox --add-dir "$AGY_DIR" --print-timeout "${budget_secs}s" $AGY_JSON_ARGS -p "" < "$agy_in" > "$agy_out" 2> "$agy_err" &
+  agy_pid=$!
+  rm -f "$agy_in"   # the child holds the descriptor; the name is gone from disk
+else
+  "$AGY_BIN" --model "${AGY_MODEL:-gemini-3.7-flash-high}" --mode plan --sandbox --add-dir "$AGY_DIR" --print-timeout "${budget_secs}s" -p "$prompt" < /dev/null > "$agy_out" 2> "$agy_err" &
+  agy_pid=$!
+fi
 # Wall clock, not an iteration count: each loop pass costs a kill -0, a sleep and
 # scheduler latency, so counting passes overshoots on a loaded host and stalls
 # entirely across a suspend — and the PTY fallback below already computes its own
@@ -286,7 +320,29 @@ def _ok(s):
         return True
     except Exception:
         return False
+import os
 raw = sys.stdin.read().strip()          # .strip(): leading whitespace must not decide this
+# stream-json: one event per line; the final `result` event carries the same
+# envelope the json format returns. Any other event line is progress, never an
+# answer, and must never reach stdout — a caller ingests every line as a finding.
+events = []
+for l in raw.splitlines():
+    try:
+        e = json.loads(l)
+    except Exception:
+        events = None
+        break
+    if not isinstance(e, dict) or "event" not in e:
+        events = None
+        break
+    events.append(e)
+if events:
+    results = [e.get("result") for e in events if e.get("event") == "result"]
+    if not results or not isinstance(results[-1], dict):
+        sys.stderr.write("agyask: stream ended without a result event — agy died mid-stream.\n")
+        sys.exit(3)
+    j = results[-1]
+    raw = json.dumps(j)
 try:
     j = json.loads(raw)
 except Exception:
@@ -313,6 +369,12 @@ st = j.get("status")
 if j.get("error") or (isinstance(st, str) and st.upper() != "SUCCESS"):
     sys.stderr.write("agyask: agy reported status=%r error=%r — not an answer.\n" % (st, j.get("error")))
     sys.exit(3)
+if os.environ.get("AGY_SCHEMA"):
+    so = j.get("structured_output")
+    if not isinstance(so, (dict, list)):
+        sys.stderr.write("agyask: AGY_SCHEMA set but the envelope carries no structured_output — agy did not honour the schema.\n")
+        sys.exit(3)
+    r = json.dumps(so, ensure_ascii=False)   # one line, clean JSON; `response` is a fenced blob under a schema
 if not r.strip():
     sys.exit(5)                         # envelope, empty answer -> treat as no output
 sys.stdout.write(r)
@@ -325,7 +387,7 @@ sys.stderr.write("BABEL_USAGE {\"provider\":\"agy\",\"total_tokens\":%s}\n" % (u
     0) out=$_resp ;;
     4) : ;;                             # not an envelope: $out already is the answer
     5) out="" ;;                        # falls through to the empty-output path below
-    *) printf 'agyask: --output-format json produced output that is neither an envelope nor valid finding-jsonl; refusing to print it.\n' >&2
+    *) printf 'agyask: agy JSON mode produced output that is neither a result envelope nor valid finding-jsonl; refusing to print it.\n' >&2
        # `if`, not `[ ] && exit`: under set -e a failing test in a bare && list
        # ends the script with 1, which is neither agy's status nor ours.
        if [ "$rc" -ne 0 ]; then exit "$rc"; fi   # keep agy's own status when it had one
