@@ -41,11 +41,11 @@ here. Passed the M gate over 2 rounds; round 2 found 3 H defects, **every one in
 had just written** — round 1 took an external finding's *conclusion* instead of re-deriving it.
 
 **qwen audit of `skills/babel/tests/` (08-27)** — 12 calls, 19 raw, **0 confirmed** (all deliberate design). `~/Claude/.babel/qwen-audit/`.
-
 **Fable 5.1 full audit (2026-09-02)** — `.babel/AUDIT-2026-09-02.md` (gitignored). Confirmed: loop.md frozen-set
 gate bypassed by symlink conftest and by editing root `.gitignore` (H1); cdx-sol offload false-FAIL under a symlinked
 `--cwd` (M1); agyask prints an agy error envelope as an answer (M2); §7 gate opens `.npmrc`/`.netrc` (M4). 16 doc
 contradictions (D1-D16). All fixed + committed; SOL review (normal, 474k tokens) found 3 real holes in the first fix — fixed, tested.
+**agy 1.1.23 (09-02)**: agyask now stream-json stdin (3/3, 40 KB ok) + `AGY_SCHEMA`; `--disable-slash-commands` DISABLES `--mode plan` — never add it. agy = closed binary, only the shim is fixable.
 
 ## 次のタスク / 未解決
 
