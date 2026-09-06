@@ -1,17 +1,37 @@
 # babel — multi-model orchestration for Claude Code
 
-`babel` is a Claude Code **skill** that orchestrates five models
-(Fable 5 / Opus / Sonnet / GPT-5.6-SOL / Gemini 3 via `agy`) across the
-[superpowers](https://github.com/obra/superpowers) pipeline
-(brainstorm → plan → implement → review). It injects multi-model
-**debate / build-debug / acceptance-gate** into each phase so the result
-exceeds what a single frontier model produces — an ensemble
-approach applied to a dev workflow.
+`babel` is a Claude Code **skill** that runs a dev task through
+brainstorm → plan → implement → review, injecting
+**debate / build-debug / an acceptance gate** into each phase so the result
+exceeds what one pass of one model produces.
 
 > Not the JavaScript Babel transpiler. This is an AI-orchestration skill.
 
-This repo ships **three skills** as a set, because `babel` calls the other two
-as its second/third-opinion channels:
+## Start here: Claude Code alone is enough
+
+```
+/plugin marketplace add dT-Tb-labs/babel-orchestration
+/plugin install babel-orchestration@dt-tb-labs
+```
+
+Then `/babel <task>`. Nothing else to install, no shell script to run.
+
+In this mode every channel is a Claude model: the lead designs, delegated
+Sonnet agents review each dimension in parallel, and Opus adversarially
+verifies what they found. babel says so at the crew proposal — reviewers
+drawn from one family share its blind spots, so it discloses the reduced
+independence rather than hiding it.
+
+You get the whole process: the S/M/L crew sizing, the three routes below,
+the acceptance gate with code-grounded verification, the token budget and
+its re-approval triggers.
+
+## Optional: two independent outside opinions
+
+If you already have a ChatGPT or Google subscription, two extra channels
+turn the single-family review into a cross-family one. Both are optional
+force multipliers, never requirements — babel drops a missing channel and
+tells you (degradation table in `skills/babel/SKILL.md`).
 
 | Skill | Role | Backend |
 |---|---|---|
@@ -19,10 +39,14 @@ as its second/third-opinion channels:
 | `cdx-sol` | Independent design / diagnosis / review channel | GPT-5.6-SOL via OpenAI Codex CLI (ChatGPT subscription) |
 | `agy` | Third-opinion cross-review channel | Google Antigravity CLI (`agy`, Gemini 3) |
 
-`babel` degrades gracefully: if `cdx-sol` or `agy` is unavailable it drops that
-channel and tells you (see the degradation table in `skills/babel/SKILL.md`).
-You can run `babel` with only the channels you have — the other two are optional
-force multipliers, not hard requirements.
+These two need `sh install.sh`, not the plugin install — their `solask` and
+`agyask` shims have to land on `PATH` and be named in `sandbox.excludedCommands`,
+which a plugin install does not do. See [Install](#install).
+
+`babel` also extends the
+[superpowers](https://github.com/obra/superpowers) skill set when you have it,
+and works without it.
+
 
 ## What's in each skill
 
@@ -98,16 +122,31 @@ plus evaluator-tampering detection from the reward-hacking benchmarks (EvilGenie
 SpecBench, RewardHackingAgents). Credits and the reason each rule has its shape are in
 `references/loop.md` §L8.
 
-
 ## Install
 
-Run the installer — it copies the three skills into `~/.claude/skills/` and
-self-tests each channel (missing optional channels are warnings, not errors):
+Two paths. Pick by whether you want the external channels.
+
+### 1. Plugin — Claude-only mode
+
+```
+/plugin marketplace add dT-Tb-labs/babel-orchestration
+/plugin install babel-orchestration@dt-tb-labs
+```
+
+No shell script runs, and the skills update with the marketplace. This gives
+you `babel` in single-channel mode: `cdx-sol` and `agy` ship with the plugin as
+documentation, but their shims are not on `PATH`, so babel reports both
+channels degraded off and runs the Claude-only shapes.
+
+### 2. Installer — adds the two external channels
 
 ```bash
 sh install.sh            # install + self-test
 sh install.sh --check    # self-test only, no copy
 ```
+
+It copies the three skills into `~/.claude/skills/` and self-tests each channel
+(a missing optional channel is a warning, not an error).
 
 Or copy manually:
 
@@ -120,11 +159,10 @@ The internal references use portable `$HOME/.claude/skills/...` paths, so no
 editing is needed as long as all three live under `~/.claude/skills/`. Without
 the second line both external channels are dead: babel invokes `agyask` and
 `solask` by bare name, and `install.sh` is what normally puts them on `PATH`.
-
-**Minimal setup:** only `babel` + Claude Code is required. `cdx-sol` and `agy`
-are optional independent-review channels — babel runs with whatever you have and
-tells you when a channel is degraded off. See the "Dependencies & minimal setup" section in
-`skills/babel/SKILL.md` for the Claude-only (single-channel) mode.
+Both shims also have to be named in `sandbox.excludedCommands` in
+`~/.claude/settings.json` — `install.sh` prints the exact entries but does not
+edit your settings for you. Read "What the sandbox exclusion costs you" below
+before adding them.
 
 Then invoke from Claude Code:
 

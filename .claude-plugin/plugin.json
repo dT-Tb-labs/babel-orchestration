@@ -1,0 +1,21 @@
+{
+  "name": "babel-orchestration",
+  "displayName": "babel — multi-model orchestration",
+  "version": "1.0.0",
+  "description": "Orchestrates 5 models (Fable 5 / Opus / Sonnet / GPT-5.6-SOL / Gemini 3) across brainstorm-plan-implement-review, injecting debate, build-debug and an acceptance gate into each phase. Runs Claude-only out of the box; the two external channels are optional.",
+  "author": {
+    "name": "dT-Tb-labs",
+    "url": "https://github.com/dT-Tb-labs"
+  },
+  "homepage": "https://github.com/dT-Tb-labs/babel-orchestration",
+  "repository": "https://github.com/dT-Tb-labs/babel-orchestration",
+  "license": "MIT",
+  "keywords": [
+    "orchestration",
+    "multi-model",
+    "code-review",
+    "second-opinion",
+    "acceptance-gate",
+    "loop-engineering"
+  ]
+}

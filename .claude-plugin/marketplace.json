@@ -1,0 +1,17 @@
+{
+  "name": "dt-tb-labs",
+  "owner": {
+    "name": "dT-Tb-labs",
+    "url": "https://github.com/dT-Tb-labs"
+  },
+  "description": "Multi-model orchestration skills for Claude Code.",
+  "plugins": [
+    {
+      "name": "babel-orchestration",
+      "source": "./",
+      "description": "5-model debate / build-debug / acceptance-gate pipeline, plus a measured optimization loop route.",
+      "license": "MIT",
+      "keywords": ["orchestration", "multi-model", "code-review"]
+    }
+  ]
+}
