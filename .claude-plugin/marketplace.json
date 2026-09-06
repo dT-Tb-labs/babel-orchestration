@@ -4,14 +4,20 @@
     "name": "dT-Tb-labs",
     "url": "https://github.com/dT-Tb-labs"
   },
-  "description": "Multi-model orchestration skills for Claude Code.",
+  "description": "Multi-model code review and orchestration plugins for Claude Code.",
   "plugins": [
     {
       "name": "babel-orchestration",
       "source": "./",
-      "description": "5-model debate / build-debug / acceptance-gate pipeline, plus a measured optimization loop route.",
+      "description": "Independent second-opinion code review across Claude, GPT-5.6-SOL and Gemini 3, with code-grounded verification and a token budget you approve.",
       "license": "MIT",
-      "keywords": ["orchestration", "multi-model", "code-review"]
+      "keywords": [
+        "code-review",
+        "second-opinion",
+        "multi-model",
+        "ai-code-review",
+        "orchestration"
+      ]
     }
   ]
 }
