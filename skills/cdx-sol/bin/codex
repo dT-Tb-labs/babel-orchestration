@@ -1,0 +1,45 @@
+#!/bin/sh
+# codex — channel-only shim. solask puts this directory first on PATH, so the
+# companion's `spawn("codex", ["app-server"])` lands here and the app-server it
+# starts carries the overrides below. ~/.codex (config, auth, sessions) is shared
+# untouched: a separate CODEX_HOME would need a copied auth.json, and ChatGPT
+# refresh tokens rotate — one home refreshing would log the other out.
+#
+# What the overrides cut: every Codex turn ships the tool/skill surface of every
+# enabled plugin, MCP server and feature. None of that is used by a read-only
+# review, and it was most of a trivial call's ~35k tokens (measured 2026-09-26).
+# Only this channel's app-server sees them; the desktop app and a plain `codex`
+# keep ~/.codex/config.toml as-is.
+#
+# Runs under solask, i.e. outside the Claude Code sandbox: the real binary is
+# resolved from fixed locations, never from PATH (that would find this file again,
+# or something planted ahead of it).
+set -eu
+
+REAL=""
+for _c in /opt/homebrew/bin/codex /usr/local/bin/codex; do
+  [ -x "$_c" ] && { REAL=$_c; break; }
+done
+[ -n "$REAL" ] || { printf 'cdx-sol codex shim: no codex in /opt/homebrew/bin or /usr/local/bin\n' >&2; exit 127; }
+
+[ "${1:-}" = app-server ] || exec "$REAL" "$@"
+shift
+
+exec "$REAL" app-server \
+  -c model_verbosity='"low"' \
+  -c model_reasoning_summary='"none"' \
+  -c mcp_servers.node_repl.enabled=false \
+  -c mcp_servers.computer-use.enabled=false \
+  --disable plugins \
+  --disable remote_plugin \
+  --disable apps \
+  --disable browser_use \
+  --disable browser_use_external \
+  --disable in_app_browser \
+  --disable computer_use \
+  --disable image_generation \
+  --disable multi_agent \
+  --disable goals \
+  --disable tool_suggest \
+  --disable skill_search \
+  "$@"

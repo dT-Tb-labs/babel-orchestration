@@ -38,9 +38,21 @@ case "${0##*/}" in
     ;;
 esac
 
-: "${CLAUDE_PLUGIN_DATA:=$HOME/.local/state/babel/codex-inline}"
+# Lean app-server: cdx-sol/bin/codex adds -c/--disable overrides (no plugins, MCP,
+# browser/computer-use/image tools; verbosity low; no reasoning summary) to the
+# app-server the companion spawns via PATH. Both lines below exist so that spawn
+# actually happens here, not somewhere reused:
+# - the state root is FORCED, not defaulted: the companion reuses the broker
+#   recorded under it, and a broker started elsewhere (the codex plugin's own
+#   root, which Claude Code exports as CLAUDE_PLUGIN_DATA) runs a full app-server.
+#   A new directory name, so brokers started before the overrides are not reused.
+# - an inherited broker endpoint is dropped for the same reason.
+CLAUDE_PLUGIN_DATA=$HOME/.local/state/babel/codex-lean
 export CLAUDE_PLUGIN_DATA
 mkdir -p "$CLAUDE_PLUGIN_DATA"
+unset CODEX_COMPANION_APP_SERVER_ENDPOINT
+PATH=$HOME/.claude/skills/cdx-sol/bin:$PATH
+export PATH
 
 # This shim is sandbox-excluded, so anything it executes runs with the user's full
 # access. Three consequences, all of which cost nothing to close:

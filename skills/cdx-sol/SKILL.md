@@ -25,7 +25,7 @@ The wrapper's own ~9 min poll cap (`WALL_CAP_MS`) is what actually bounds the ca
 
 ## Token discipline (why this skill exists)
 
-Four levers, all applied by default:
+Five levers, all applied by default:
 
 1. **Prompt (IN):** write the `<prompt>` caveman-compressed — drop filler, keep technical substance. Always include: the `--cwd` repo path, the exact target files, and the success criteria. Under-context makes SOL ask back = a wasted round-trip, so compress filler, never substance.
 2. **Reasoning (the big lever = subscription burn):** pick the tier.
@@ -33,7 +33,8 @@ Four levers, all applied by default:
    - `normal` (effort medium, default) — most reviews / diagnosis.
    - `deep` (effort high) — hard multi-file reasoning only. Costs the most subscription quota and time (a high-effort run can take 5–6 min).
 3. **Shell output (IN, model side):** when `rtk` ([rtk-ai/rtk](https://github.com/rtk-ai/rtk)) is at `/opt/homebrew/bin` or `/usr/local/bin`, the wrapper also appends a hint telling SOL to prefix its shell commands with `rtk` — compressed `ls`/`grep`/`git diff` output, same data. A hint, not a hook: SOL may ignore it. Measured 2026-09-26: `rtk ls`/`rtk grep` exit 0 inside SOL's read-only sandbox. Global `rtk init -g --codex` was deliberately not run — it edits `~/.codex/AGENTS.md` for every Codex use, not just this channel.
-4. **Output (OUT):** the wrapper appends a terse directive to every prompt, and offloads any output over ~24k chars to `<cwd>/.sol/` (returning a head + file path) so a big dump never floods context.
+4. **Lean app-server (IN fixed cost, biggest lever):** `solask` puts `bin/` first on PATH, so the companion's `codex app-server` spawn goes through `bin/codex`, which adds `-c`/`--disable` overrides: no plugins, no MCP servers, no browser/computer-use/image/multi-agent/goals/tool-suggest/skill-search tools, `model_verbosity="low"`, `model_reasoning_summary="none"`. `~/.codex` (config, auth, sessions) stays shared and untouched — a separate `CODEX_HOME` was rejected because ChatGPT refresh tokens rotate and a copied `auth.json` would log one side out. Measured 2026-09-26, same one-line quick prompt: 34,985 tokens before, 23,379 / 23,329 after (-33%). The state root is forced to `~/.local/state/babel/codex-lean` so a broker started without the overrides is never reused; after editing `bin/codex`, kill the running `app-server-broker.mjs` under that root or the old flags keep serving. To drop the lean mode, delete the `PATH=` line in `solask`.
+5. **Output (OUT):** the wrapper appends a terse directive to every prompt, and offloads any output over ~24k chars to `<cwd>/.sol/` (returning a head + file path) so a big dump never floods context.
 
 ## Safety
 
