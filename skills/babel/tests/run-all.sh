@@ -81,6 +81,7 @@ run() {
 printf 'babel self-tests:\n'
 run gate-selftest          sh      gate-selftest.sh
 run loop-selftest          sh      loop-selftest.sh
+run scratch-repo-isolation sh      scratch-repo-isolation.sh
 run deadline-check         sh      deadline-check.sh
 run rule-attribution       sh      rule-attribution-check.sh
 run a6-selftest            node    a6-selftest.mjs

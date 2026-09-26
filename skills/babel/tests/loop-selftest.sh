@@ -91,11 +91,19 @@ grep -q '^frozen_precheck() {' "$BLOCK" || { echo "FAIL: block never defines fro
 # only exist once the frozen root lives inside a worktree.
 REPO2=$TMP/repo2
 mkdir "$REPO2"
-( cd "$REPO2" && git init -q && git config user.email t@t && git config user.name t )
+# REPO2 lives inside the real working tree. If `git init` fails (it does in the
+# Claude Code sandbox) a bare `git add -A && git commit` walks up and commits the
+# REAL repo's pending changes. So: stop on init failure, and pin every write to
+# REPO2's own .git — GIT_DIR never walks up; a missing .git is an error.
+git init -q "$REPO2" || { echo "FAIL: git init failed in $REPO2"; exit 1; }
+[ "$(git -C "$REPO2" rev-parse --show-toplevel 2>/dev/null)" = "$REPO2" ] ||
+  { echo "FAIL: $REPO2 is not its own git toplevel — refusing to commit"; exit 1; }
+g2() { GIT_DIR="$REPO2/.git" GIT_WORK_TREE="$REPO2" git -C "$REPO2" "$@"; }
+g2 config user.email t@t && g2 config user.name t || { echo 'FAIL: git config in scratch repo'; exit 1; }
 mkdir -p "$REPO2/tests"
 printf 'def test(): assert bench() < 100\n' > "$REPO2/tests/oracle.py"
 printf '__pycache__/\n' > "$REPO2/.gitignore"
-( cd "$REPO2" && git add -A && git commit -qm init )
+g2 add -A && g2 commit -qm init || { echo 'FAIL: initial commit in scratch repo'; exit 1; }
 
 FROZEN=$TMP/blackboard/f2.manifest
 frozen_record "$REPO2" tests || { echo 'FAIL: frozen_record failed inside a repo'; exit 1; }
@@ -158,7 +166,7 @@ FROZEN=$TMP/blackboard/f2.manifest
 printf 'x\n' > "$REPO2/tests/helper.py"
 frozen_precheck "$REPO2" tests >/dev/null 2>&1
 [ $? -eq 2 ] || { echo 'FAIL: frozen_precheck did not flag an untracked file in a frozen root'; exit 1; }
-( cd "$REPO2" && git add -A && git commit -qm add )
+g2 add -A && g2 commit -qm add || { echo 'FAIL: second commit in scratch repo'; exit 1; }
 frozen_precheck "$REPO2" tests >/dev/null 2>&1 ||
   { echo 'FAIL: frozen_precheck rejected a fully committed frozen root'; exit 1; }
 
