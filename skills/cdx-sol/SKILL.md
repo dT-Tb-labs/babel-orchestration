@@ -1,11 +1,11 @@
 ---
 name: cdx-sol
-description: Use when the user invokes /cdx-sol or wants to send a task to GPT-5.6-SOL (OpenAI's Codex model) from Claude Code stably and token-efficiently. Wraps codex-companion via cdx-sol.mjs — background+poll for 120s-timeout safety, read-only by default, effort-tier + terse-output token control. Runs on the ChatGPT subscription (no per-token API billing).
+description: Use when the user invokes /cdx-sol or wants to send a task to GPT-6-SOL (OpenAI's Codex model) from Claude Code stably and token-efficiently. Wraps codex-companion via cdx-sol.mjs — background+poll for 120s-timeout safety, read-only by default, effort-tier + terse-output token control. Runs on the ChatGPT subscription (no per-token API billing).
 ---
 
-# cdx-sol — stable, token-efficient GPT-5.6-SOL access
+# cdx-sol — stable, token-efficient GPT-6-SOL access
 
-Send a task to GPT-5.6-SOL through the local Codex subscription. Use for second-opinion review, independent diagnosis, or rescue work where a non-Claude model helps.
+Send a task to GPT-6-SOL through the local Codex subscription. Use for second-opinion review, independent diagnosis, or rescue work where a non-Claude model helps.
 
 ## Invoke
 
@@ -15,20 +15,26 @@ solask --tier <quick|normal|deep> --cwd "<repo-abs-path>" "<prompt>"
 
 `solask` (`~/.local/bin/solask`, installed by `install.sh`) is a thin shim over `cdx-sol.mjs` that exists for two reasons, both fatal without it inside Claude Code: it points `CLAUDE_PLUGIN_DATA` at a writable state root, since the default `~/.claude/plugins/data` is on the sandbox deny list and the job dies with `EPERM ... /jobs/task-*.log`; and it is a distinct command name that `sandbox.excludedCommands` (list both `"solask"` and `"solask *"`: measured on Claude Code 2.1.220 either form alone works, but the official docs use the wildcard form in one place and bare names in another without stating the rule, so listing both is free insurance) can send outside the sandbox, because cdx-sol shells out to `sandbox-exec` and that cannot nest inside Claude's own sandbox (`sandbox_apply: Operation not permitted` on every workspace read). SOL's read-only sandbox is unaffected; only the wrapper moves. Calling `node .../cdx-sol.mjs` directly still works outside Claude Code.
 
+**The model is pinned, not inherited.** `solask` passes `--model gpt-6-sol` explicitly. Without that pin codex takes the `model =` line in `~/.codex/config.toml`, and on 2026-09-19 that line was changed to `gpt-6-astra` — every `solask` call silently stopped being SOL, with nothing in the output saying so. The shim also refuses a caller-supplied `--model` (exit 3), but that argv scan is **not** where the pin is enforced — it cannot be, because it does not know which flags take values, so `--cwd -- --model x --allow-write` slipped past it (`--cwd` consumes the `--`, and parsing resumes). That bypass predates the pin: it defeated the `--allow-write` refusal too. Enforcement is in the engine, after parsing — the shim exports `CDX_SOL_PIN_MODEL` and `CDX_SOL_NO_WRITE=1`, and `cdx-sol.mjs` applies them there. `--selftest` pins the regression.
+
+**Sibling channel.** `~/.local/bin/astraask` is a **symlink to this same `solask`**, and the shim picks the model from the name it was invoked as (`solask` → `gpt-6-sol`, `astraask` → `gpt-6-astra`). One engine, one state root, one offload directory; see `cdx-astra/SKILL.md` for the differences. Editing this shim or `cdx-sol.mjs` changes both channels.
+
 Use Bash tool `timeout: 600000` (10 min). The wrapper launches a background Codex job, polls internally, and prints only SOL's final answer — one round-trip, no progress spam. Read-only sandbox by default.
 
 The wrapper's own ~9 min poll cap (`WALL_CAP_MS`) is what actually bounds the call: with `run_in_background: true` the Bash `timeout` is ignored (measured), so the 600000 above applies only to a foreground call. Past ~9 min the wrapper prints `SOL_STILL_RUNNING` and exits **3** (not 0: an unfinished job must not read as a completed review to a caller that only checks the status). **The Codex job it leaves behind is not killed** — that is deliberate (re-attach with `--attach`), but abandoned jobs accumulate as live `codex` processes. Kill them by PID when a run is truly done with them.
 
 ## Token discipline (why this skill exists)
 
-Three levers, all applied by default:
+Five levers, all applied by default:
 
 1. **Prompt (IN):** write the `<prompt>` caveman-compressed — drop filler, keep technical substance. Always include: the `--cwd` repo path, the exact target files, and the success criteria. Under-context makes SOL ask back = a wasted round-trip, so compress filler, never substance.
 2. **Reasoning (the big lever = subscription burn):** pick the tier.
    - `quick` (effort low) — lookups, small focused checks.
    - `normal` (effort medium, default) — most reviews / diagnosis.
    - `deep` (effort high) — hard multi-file reasoning only. Costs the most subscription quota and time (a high-effort run can take 5–6 min).
-3. **Output (OUT):** the wrapper appends a terse directive to every prompt, and offloads any output over ~24k chars to `<cwd>/.sol/` (returning a head + file path) so a big dump never floods context.
+3. **Shell output (IN, model side):** when `rtk` ([rtk-ai/rtk](https://github.com/rtk-ai/rtk)) is at `/opt/homebrew/bin` or `/usr/local/bin`, the wrapper also appends a hint telling SOL to prefix its shell commands with `rtk` — compressed `ls`/`grep`/`git diff` output, same data. A hint, not a hook: SOL may ignore it. Measured 2026-09-26: `rtk ls`/`rtk grep` exit 0 inside SOL's read-only sandbox. Global `rtk init -g --codex` was deliberately not run — it edits `~/.codex/AGENTS.md` for every Codex use, not just this channel.
+4. **Lean app-server (IN fixed cost, biggest lever):** `solask` puts `bin/` first on PATH, so the companion's `codex app-server` spawn goes through `bin/codex`, which adds `-c`/`--disable` overrides: no plugins, no MCP servers, no browser/computer-use/image/multi-agent/goals/tool-suggest/skill-search tools, `model_verbosity="low"`, `model_reasoning_summary="none"`. `~/.codex` (config, auth, sessions) stays shared and untouched — a separate `CODEX_HOME` was rejected because ChatGPT refresh tokens rotate and a copied `auth.json` would log one side out. Measured 2026-09-26, same one-line quick prompt: 34,985 tokens before, 23,379 / 23,329 after (-33%). The state root is forced to `~/.local/state/babel/codex-lean` so a broker started without the overrides is never reused; after editing `bin/codex`, kill the running `app-server-broker.mjs` under that root or the old flags keep serving. To drop the lean mode, delete the `PATH=` line in `solask`.
+5. **Output (OUT):** the wrapper appends a terse directive to every prompt, and offloads any output over ~24k chars to `<cwd>/.sol/` (returning a head + file path) so a big dump never floods context.
 
 ## Safety
 
@@ -51,8 +57,10 @@ solask --attach <jobId> --cwd "<repo-abs-path>"
 Only after explicit user approval:
 
 ```bash
-node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --allow-write --cwd "<repo-abs-path>" "<prompt>"
+node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --tier normal --model gpt-6-sol --allow-write --cwd "<repo-abs-path>" "<prompt>"
 ```
+
+`--model` is not optional here in practice: a direct call without it inherits the `model =` line in `~/.codex/config.toml`, which is exactly the drift the shim's pin exists to stop.
 
 ## Troubleshoot
 

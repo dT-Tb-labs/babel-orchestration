@@ -9,7 +9,7 @@
     {
       "name": "babel-orchestration",
       "source": "./",
-      "description": "Independent second-opinion code review across Claude, GPT-5.6-SOL and Gemini 3, with code-grounded verification and a token budget you approve.",
+      "description": "Independent second-opinion code review across Claude, GPT-6-SOL and Gemini 3, with code-grounded verification and a token budget you approve.",
       "license": "MIT",
       "keywords": [
         "code-review",

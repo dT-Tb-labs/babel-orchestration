@@ -36,7 +36,7 @@ tells you (degradation table in `skills/babel/SKILL.md`).
 | Skill | Role | Backend |
 |---|---|---|
 | `babel` | Lead orchestrator: triage → phase routing → merge → gates | Claude Code (Fable 5 or Opus) |
-| `cdx-sol` | Independent design / diagnosis / review channel | GPT-5.6-SOL via OpenAI Codex CLI (ChatGPT subscription) |
+| `cdx-sol` | Independent design / diagnosis / review channel | GPT-6-SOL via OpenAI Codex CLI (ChatGPT subscription) |
 | `agy` | Third-opinion cross-review channel | Google Antigravity CLI (`agy`, Gemini 3) |
 
 These two need `sh install.sh`, not the plugin install — their `solask` and
@@ -89,7 +89,7 @@ an improvement loop instead of a linear implementation phase:
   correct it — the metric and its direction, the target value, the exact oracle
   command, and the invariants that must hold regardless of the metric. A loop with an
   underspecified goal does not fail; it succeeds at the wrong thing for its whole budget.
-- **Three models generate, the oracle selects.** Claude, GPT-5.6-SOL and Gemini 3 each
+- **Three models generate, the oracle selects.** Claude, GPT-6-SOL and Gemini 3 each
   propose one candidate per iteration, blind to each other, isolated in their own
   worktrees. Nobody votes — the measurement decides, which is why a loop can afford
   three generators where an acceptance round can barely afford three reviewers.
@@ -289,4 +289,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-<sub>**Keywords:** Claude Code skill · multi-model / multi-agent AI orchestration · LLM ensemble · agentic dev workflow · automated code review & second opinion · design debate · build-debug loop · acceptance gate · Claude (Opus / Sonnet / Fable) + GPT-5.6-SOL (OpenAI Codex) + Gemini 3 (Google Antigravity `agy`) · superpowers pipeline · multi-model ensemble pattern.</sub>
+<sub>**Keywords:** Claude Code skill · multi-model / multi-agent AI orchestration · LLM ensemble · agentic dev workflow · automated code review & second opinion · design debate · build-debug loop · acceptance gate · Claude (Opus / Sonnet / Fable) + GPT-6-SOL (OpenAI Codex) + Gemini 3 (Google Antigravity `agy`) · superpowers pipeline · multi-model ensemble pattern.</sub>

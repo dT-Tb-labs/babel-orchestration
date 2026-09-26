@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// cdx-sol.mjs — stable, token-efficient, safe GPT-5.6-SOL invocation from Claude Code.
+// cdx-sol.mjs — stable, token-efficient, safe GPT-6-SOL invocation from Claude Code.
 // Wraps codex-companion.mjs: background launch + internal poll-until-done + result.
 // Read-only by default; effort via quick|normal|deep tier; terse output; oversized-output offload.
 
@@ -38,7 +38,14 @@ const POLL_TIMEOUT_MS = 100000; // each status --wait slice; < Claude's 120s Bas
 const WALL_CAP_MS = 540000;     // stop polling ~9min, before a 600s Bash call is killed
 const OFFLOAD_CHARS = 24000;    // ~6k tokens; above this, offload full output to a file (balanced)
 const TERSE_SUFFIX =
-  "\n\n---\nReply terse: no preamble, no restatement of the task, structured bullets, code only if essential.";
+  "\n\n---\nReply terse: no preamble, no restatement of the task, no closing summary, structured bullets, one line per point. Cite file:line instead of quoting code; code only if essential. An output format stated above wins over this line.";
+// RTK (github.com/rtk-ai/rtk) compresses shell output before the model reads it —
+// the input-token side the terse suffix cannot reach. Measured 2026-09-26: `rtk ls`
+// and `rtk grep` exit 0 inside Codex's read-only sandbox on gpt-6-sol. Only a hint:
+// the model may ignore it, and nothing changes on machines without rtk.
+const RTK_HINT = ["/opt/homebrew/bin/rtk", "/usr/local/bin/rtk"].some(p => fs.existsSync(p))
+  ? "\nShell: prefix commands with `rtk` (e.g. `rtk grep`, `rtk git diff`, `rtk ls`) — compressed output, same data."
+  : "";
 
 function tierToEffort(tier) {
   if (tier == null) return TIER_EFFORT.normal;
@@ -47,15 +54,19 @@ function tierToEffort(tier) {
   return e;
 }
 
-function buildLaunchArgs({ prompt, cwd, effort, write }) {
+function buildLaunchArgs({ prompt, cwd, effort, write, model }) {
   const args = ["task", "--background", "--json", "--cwd", cwd, "--effort", effort];
+  // Omitted means "whatever ~/.codex/config.toml says" — which is how a config
+  // edit silently changed which model this wrapper had been calling. The shims
+  // pin it so a channel's name and the model it returns cannot drift apart.
+  if (model) args.push("--model", model);
   if (write) args.push("--write");
   // `--` first: the companion's parser reads any argv token starting with `--<flag>`
   // as an option wherever it sits, and the prompt is untrusted text. A prompt that
   // began with `--write=1` or `--resume-last=1` was consumed as that flag — the
   // suffix appended below kept it from doing worse than a failed launch, but the
   // terminator costs nothing and closes it for every caller.
-  args.push("--", `${prompt}${TERSE_SUFFIX}`);
+  args.push("--", `${prompt}${TERSE_SUFFIX}${RTK_HINT}`);
   return args;
 }
 
@@ -182,10 +193,38 @@ function runSelftest() {
   assert.ok(ro[ro.length - 1].startsWith("count lines"));
   assert.ok(ro[ro.length - 1].includes("Reply terse"));
   assert.equal(ro[ro.length - 2], "--"); // the prompt is never parsed as options
-  assert.equal(buildLaunchArgs({ prompt: "--write=1 x", cwd: "C:/x", effort: "medium", write: false }).includes("--write=1 x\n\n---\nReply terse: no preamble, no restatement of the task, structured bullets, code only if essential."), true);
+  assert.equal(buildLaunchArgs({ prompt: "--write=1 x", cwd: "C:/x", effort: "medium", write: false }).includes("--write=1 x\n\n---\nReply terse: no preamble, no restatement of the task, no closing summary, structured bullets, one line per point. Cite file:line instead of quoting code; code only if essential. An output format stated above wins over this line." + RTK_HINT), true);
 
   const rw = buildLaunchArgs({ prompt: "fix bug", cwd: "C:/x", effort: "high", write: true });
   assert.ok(rw.includes("--write"));
+
+  // --model: forwarded when set, absent when not (absent = inherit config.toml).
+  assert.ok(!ro.includes("--model"));
+  const md = buildLaunchArgs({ prompt: "x", cwd: "C:/x", effort: "low", write: false, model: "gpt-6-astra" });
+  assert.equal(md[md.indexOf("--model") + 1], "gpt-6-astra");
+  assert.ok(md.indexOf("--model") < md.indexOf("--")); // never inside the prompt
+  assert.equal(parseArgs(["--model", "gpt-5.6-sol", "hi"]).model, "gpt-5.6-sol");
+  assert.equal(parseArgs(["hi"]).model, null);
+  assert.equal(parseArgs(["--model", "a", "--model", "b", "hi"]).model, "b"); // last wins
+  assert.throws(() => parseArgs(["--model", "a b"]), /not a model name/);
+  assert.throws(() => parseArgs(["--model", "../x"]), /not a model name/);
+  // A value that is itself a flag reaches the companion's argv as one.
+  assert.throws(() => parseArgs(["--model", "--write"]), /not a model name/);
+  assert.throws(() => parseArgs(["--model", "-v"]), /not a model name/);
+  assert.throws(() => enforceShimPolicy({}, { CDX_SOL_PIN_MODEL: "--write" }), /not a model name/);
+
+  // The shim's argv scan is not the enforcement point. This is.
+  // The bypass it closes, verbatim: `--cwd --` eats the terminator, so everything
+  // after it is parsed as options again.
+  const slip = parseArgs(["--model", "gpt-6-astra", "--cwd", "--", "--cwd", "/repo", "--model", "gpt-5.6-sol", "--allow-write", "hi"]);
+  assert.equal(slip.model, "gpt-5.6-sol"); // argv alone: the pin lost
+  assert.equal(slip.write, true);          // argv alone: the write refusal lost
+  assert.equal(enforceShimPolicy({ ...slip }, { CDX_SOL_PIN_MODEL: "gpt-6-astra" }).model, "gpt-6-astra");
+  assert.throws(() => enforceShimPolicy({ ...slip }, { CDX_SOL_NO_WRITE: "1" }), /forbids it/);
+  assert.throws(() => enforceShimPolicy({ ...slip }, { CDX_SOL_PIN_MODEL: "a b" }), /not a model name/);
+  // A direct call sets neither, and is left exactly as parsed.
+  assert.deepEqual(enforceShimPolicy({ ...slip }, {}), slip);
+  assert.equal(enforceShimPolicy({ model: null, write: false }, { CDX_SOL_NO_WRITE: "1" }).write, false);
 
   // Usage extraction: last total wins, absence is null (never 0), and a
   // half-written final line does not cost the totals recorded before it.
@@ -254,7 +293,7 @@ function runSelftest() {
 
 function parseArgs(a) {
   const o = {
-    tier: undefined, cwd: process.cwd(), write: false,
+    tier: undefined, cwd: process.cwd(), write: false, model: null,
     attach: null, offloadChars: OFFLOAD_CHARS, prompt: "", selftest: false,
   };
   const rest = [];
@@ -270,6 +309,11 @@ function parseArgs(a) {
     else if (t === "--selftest") o.selftest = true;
     else if (t === "--tier") o.tier = need(++i, "--tier");
     else if (t === "--cwd") o.cwd = need(++i, "--cwd");
+    else if (t === "--model") {
+      // Goes straight into the companion's argv. A plain model token only.
+      o.model = need(++i, "--model");
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(o.model)) throw new Error(`--model: not a model name: "${o.model}"`);
+    }
     else if (t === "--allow-write") o.write = true;
     else if (t === "--attach") {
       // A job id names a file under the companion's state root. Only a plain
@@ -285,6 +329,27 @@ function parseArgs(a) {
     else rest.push(t);
   }
   o.prompt = rest.join(" ");
+  return o;
+}
+
+// The shim (~/.local/bin/solask, and the astraask symlink) scans argv to refuse
+// --allow-write and a caller-supplied --model. That scan cannot be authoritative:
+// it does not know which flags take VALUES, so it stops at the first bare `--`
+// while parseArgs happily consumes that same `--` as, say, --cwd's value and keeps
+// parsing. `solask --cwd -- --allow-write hi` defeated the write refusal that way
+// long before a model pin existed. Enforce here instead, after parsing, where the
+// values are final. The shim sets these; a direct `node cdx-sol.mjs` call does not.
+function enforceShimPolicy(o, env) {
+  const pin = env.CDX_SOL_PIN_MODEL;
+  if (pin) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(pin)) throw new Error(`CDX_SOL_PIN_MODEL: not a model name: "${pin}"`);
+    // Unconditional: the pin is the channel's identity, and argv is where the
+    // untrusted prompt text lands. Last --model on the line must not win here.
+    o.model = pin;
+  }
+  if (env.CDX_SOL_NO_WRITE === "1" && o.write) {
+    throw new Error("--allow-write reached cdx-sol.mjs through a shim that forbids it. Run write mode as a direct `node cdx-sol.mjs --allow-write` call, after the user approves it.");
+  }
   return o;
 }
 
@@ -318,10 +383,10 @@ function runCompanion(args, cwd, timeoutMs = 60000) {
   return { code, stdout, stderr, signal: r.signal ?? null };
 }
 
-function launchBackground({ prompt, cwd, effort, write }) {
+function launchBackground({ prompt, cwd, effort, write, model }) {
   // Launch only spawns the job and prints its id; a minute is generous. Bounded
   // for the same reason the poll slices are: nothing above this call can stop it.
-  const { code, stdout, stderr, timedOut } = runCompanion(buildLaunchArgs({ prompt, cwd, effort, write }), cwd, 60000);
+  const { code, stdout, stderr, timedOut } = runCompanion(buildLaunchArgs({ prompt, cwd, effort, write, model }), cwd, 60000);
   let jobId;
   try { jobId = JSON.parse(stdout).jobId } catch { jobId = null }
   // A launch that timed out may still have spawned the job and printed its id
@@ -343,7 +408,10 @@ function waitLoop(jobId, cwd, wallCapMs = WALL_CAP_MS) {
   while (true) {
     const remaining = wallCapMs - elapsed();
     if (remaining <= SAFETY_MS) return "running"; // graceful: caller re-attaches
-    const slice = Math.min(POLL_TIMEOUT_MS, remaining - SAFETY_MS);
+    // Math.floor: `remaining` comes from performance.now()/Date.now() and is a float, so the
+    // last slice (and any shortened cap, e.g. --attach) handed child_process a float `timeout`,
+    // which Node rejects outright: ERR_OUT_OF_RANGE "must be an integer. Received 79728.67".
+    const slice = Math.floor(Math.min(POLL_TIMEOUT_MS, remaining - SAFETY_MS));
     // Hard bound one slice above what the companion was asked to wait, so a slice
     // that stops returning costs one backoff, not the whole call.
     const { code, stdout, stderr } = runCompanion(
@@ -388,11 +456,11 @@ function fetchResult(jobId, cwd) {
 const START_MONO = performance.now(), START_WALL = Date.now();
 
 function main() {
-  const o = parseArgs(process.argv.slice(2));
+  const o = enforceShimPolicy(parseArgs(process.argv.slice(2)), process.env);
   if (o.selftest) { runSelftest(); process.exit(0); }
 
   if (!o.attach && !o.prompt) {
-    console.error('Usage: node cdx-sol.mjs [--tier quick|normal|deep] [--cwd <path>] [--allow-write] [--attach <jobId>] "<prompt>"');
+    console.error('Usage: node cdx-sol.mjs [--tier quick|normal|deep] [--model <name>] [--cwd <path>] [--allow-write] [--attach <jobId>] "<prompt>"');
     process.exit(2);
   }
 
@@ -403,14 +471,14 @@ function main() {
   // evaluate (protocol.md §8). Written first so a wedge during launch is covered
   // too. Same line shape as agyask, stdout untouched.
   process.stderr.write(
-    `BABEL_DEADLINE {"provider":"sol","cap_s":${Math.round(WALL_CAP_MS / 1000)},` +
+    `BABEL_DEADLINE {"provider":"sol","model":${JSON.stringify(o.attach ? null : o.model)},"cap_s":${Math.round(WALL_CAP_MS / 1000)},` +
     `"deadline":${Math.round((START_WALL + WALL_CAP_MS) / 1000)},"pid":${process.pid}}\n`);
 
   let jobId;
   if (o.attach) {
     jobId = o.attach;
   } else {
-    jobId = launchBackground({ prompt: o.prompt, cwd: o.cwd, effort: tierToEffort(o.tier), write: o.write });
+    jobId = launchBackground({ prompt: o.prompt, cwd: o.cwd, effort: tierToEffort(o.tier), write: o.write, model: o.model });
   }
 
   // The advertised bound is the whole process, not the poll loop: a 60s launch
@@ -437,7 +505,7 @@ function main() {
   // stderr, never stdout: a caller redirects stdout into the round's .raw file
   // and parses every line of it as a finding. Same line shape as agyask, so the
   // lead reads one format for both external channels.
-  process.stderr.write(`BABEL_USAGE {"provider":"sol","total_tokens":${readUsage(threadId) ?? "null"}}\n`);
+  process.stderr.write(`BABEL_USAGE {"provider":"sol","model":${JSON.stringify(o.attach ? null : o.model)},"total_tokens":${readUsage(threadId) ?? "null"}}\n`);
   if (status !== "completed" || exitStatus !== 0) {
     console.error(`\n[SOL job ${jobId} status=${status} exit=${exitStatus}]`);
     process.exit(1);

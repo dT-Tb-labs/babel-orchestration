@@ -15,7 +15,7 @@ For files the receiver can read, pass "path + line range" — do not paste conte
 
 | Receiver | How it reads | How you pass |
 |---|---|---|
-| SOL (GPT-5.6) | reads itself via `--cwd` | path only |
+| SOL (GPT-6) | reads itself via `--cwd` | path only |
 | Claude subagent | Read/Grep | path only |
 | agy (Gemini 3) | no fs reads in practice — see below | exceptionally inline. **diff hunks only**, full-text paste prohibited |
 
