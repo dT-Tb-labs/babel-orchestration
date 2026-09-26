@@ -38,7 +38,7 @@ const POLL_TIMEOUT_MS = 100000; // each status --wait slice; < Claude's 120s Bas
 const WALL_CAP_MS = 540000;     // stop polling ~9min, before a 600s Bash call is killed
 const OFFLOAD_CHARS = 24000;    // ~6k tokens; above this, offload full output to a file (balanced)
 const TERSE_SUFFIX =
-  "\n\n---\nReply terse: no preamble, no restatement of the task, structured bullets, code only if essential.";
+  "\n\n---\nReply terse: no preamble, no restatement of the task, no closing summary, structured bullets, one line per point. Cite file:line instead of quoting code; code only if essential. An output format stated above wins over this line.";
 // RTK (github.com/rtk-ai/rtk) compresses shell output before the model reads it —
 // the input-token side the terse suffix cannot reach. Measured 2026-09-26: `rtk ls`
 // and `rtk grep` exit 0 inside Codex's read-only sandbox on gpt-6-sol. Only a hint:
@@ -193,7 +193,7 @@ function runSelftest() {
   assert.ok(ro[ro.length - 1].startsWith("count lines"));
   assert.ok(ro[ro.length - 1].includes("Reply terse"));
   assert.equal(ro[ro.length - 2], "--"); // the prompt is never parsed as options
-  assert.equal(buildLaunchArgs({ prompt: "--write=1 x", cwd: "C:/x", effort: "medium", write: false }).includes("--write=1 x\n\n---\nReply terse: no preamble, no restatement of the task, structured bullets, code only if essential." + RTK_HINT), true);
+  assert.equal(buildLaunchArgs({ prompt: "--write=1 x", cwd: "C:/x", effort: "medium", write: false }).includes("--write=1 x\n\n---\nReply terse: no preamble, no restatement of the task, no closing summary, structured bullets, one line per point. Cite file:line instead of quoting code; code only if essential. An output format stated above wins over this line." + RTK_HINT), true);
 
   const rw = buildLaunchArgs({ prompt: "fix bug", cwd: "C:/x", effort: "high", write: true });
   assert.ok(rw.includes("--write"));
