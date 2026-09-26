@@ -2,7 +2,7 @@
   "name": "babel-orchestration",
   "displayName": "babel — multi-model orchestration",
   "version": "1.0.0",
-  "description": "Multi-model code review and orchestration for Claude Code. Get an independent second opinion on every design and diff from GPT-5.6-SOL (Codex) and Gemini 3, with findings verified against real code, not model agreement. Runs on Claude alone out of the box; the outside channels are optional.",
+  "description": "Multi-model code review and orchestration for Claude Code. Get an independent second opinion on every design and diff from GPT-6-SOL (Codex) and Gemini 3, with findings verified against real code, not model agreement. Runs on Claude alone out of the box; the outside channels are optional.",
   "author": {
     "name": "dT-Tb-labs",
     "url": "https://github.com/dT-Tb-labs"

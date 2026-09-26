@@ -1,49 +1,84 @@
 #!/bin/sh
-# solask — the normal way to call cdx-sol from inside Claude Code.
+# solask / astraask — the normal way to call the Codex channel from Claude Code.
 #
-# Installed to ~/.local/bin by install.sh. Two things it guarantees:
+# ONE script, TWO command names. The name it is invoked as picks the model:
+#
+#   solask    -> gpt-6-sol
+#   astraask  -> gpt-6-astra   (skills/cdx-astra; ~/.local/bin/astraask is a symlink here)
+#
+# Installed to ~/.local/bin by install.sh. Four things it guarantees:
 #
 # 1. The job can write its state. codex-companion's default state root
 #    (~/.claude/plugins/data) is on the sandbox deny list, so a plain call dies
-#    with "EPERM: operation not permitted, open .../jobs/task-*.log" before SOL is
-#    ever reached. CLAUDE_PLUGIN_DATA moves it somewhere writable.
+#    with "EPERM: operation not permitted, open .../jobs/task-*.log" before the
+#    model is ever reached. CLAUDE_PLUGIN_DATA moves it somewhere writable.
+#    Both names share one state root on purpose: --attach works across them.
 #
 # 2. It has a distinct command name, so sandbox.excludedCommands can send it
 #    outside the sandbox. cdx-sol shells out to sandbox-exec for its own read-only
 #    sandbox, and that cannot nest inside Claude Code's sandbox — every workspace
-#    read fails with "sandbox_apply: Operation not permitted". SOL's own read-only
-#    sandbox still applies; what moves is only where the wrapper runs.
+#    read fails with "sandbox_apply: Operation not permitted". The model's own
+#    read-only sandbox still applies; what moves is only where the wrapper runs.
+#
+# 3. The model is PINNED per command name. Without the pin, codex inherits
+#    ~/.codex/config.toml — so editing one line there silently changed which model
+#    every "SOL" call had been talking to, with nothing in the output saying so.
 #
 # Runs outside the Claude Code sandbox via sandbox.excludedCommands
-# ("solask" + "solask *"). Renaming this script means updating that list.
-# See SKILL.md.
+# ("solask" + "solask *" + "astraask" + "astraask *"). Renaming this script, or
+# the symlink, means updating that list. See cdx-sol/SKILL.md and cdx-astra/SKILL.md.
 set -eu
+
+case "${0##*/}" in
+  solask)   MODEL=gpt-6-sol ;;
+  astraask) MODEL=gpt-6-astra ;;
+  *)
+    printf '%s: not a known channel name (solask|astraask). Refusing: the model pin is chosen by this name.\n' "${0##*/}" >&2
+    exit 3
+    ;;
+esac
 
 : "${CLAUDE_PLUGIN_DATA:=$HOME/.local/state/babel/codex-inline}"
 export CLAUDE_PLUGIN_DATA
 mkdir -p "$CLAUDE_PLUGIN_DATA"
 
 # This shim is sandbox-excluded, so anything it executes runs with the user's full
-# access. Two consequences, both of which cost nothing to close:
+# access. Three consequences, all of which cost nothing to close:
 #
 # 1. CDX_SOL_COMPANION makes cdx-sol.mjs execute an arbitrary path. Reaching it
-#    through solask turns "can run a sandboxed command" into "can run anything
+#    through this shim turns "can run a sandboxed command" into "can run anything
 #    unsandboxed", so the override is refused here. Set it on a direct
 #    `node .../cdx-sol.mjs` call instead — that one is inside the sandbox and goes
 #    through the normal permission prompt.
 # 2. Write mode is documented as a direct `node .../cdx-sol.mjs --allow-write` call
 #    (cdx-sol/SKILL.md). Accepting the flag here let it inherit the exclusion with
 #    nothing but prose asking for user approval first.
+# 3. --model is refused for the same reason the pin exists: cdx-sol.mjs takes the
+#    last --model on the line, so a caller-supplied one would silently win and the
+#    channel name would stop describing what answered.
+#
+# The scan below is a fast, legible refusal — it is NOT the enforcement point, and
+# it cannot be. It does not know which flags take VALUES, so it stops at the first
+# bare `--` while cdx-sol.mjs consumes that same `--` as (say) --cwd's value and
+# keeps parsing: `--cwd -- --allow-write hi` slipped straight past this loop, and
+# did so long before a model pin existed. The two exports below are what actually
+# holds; cdx-sol.mjs applies them AFTER parsing, where the values are final.
 if [ -n "${CDX_SOL_COMPANION:-}" ]; then
-  printf 'solask: CDX_SOL_COMPANION is set. This shim runs outside the Claude Code sandbox and will not execute an overridden companion path. Call cdx-sol.mjs directly if you mean it.\n' >&2
+  printf '%s: CDX_SOL_COMPANION is set. This shim runs outside the Claude Code sandbox and will not execute an overridden companion path. Call cdx-sol.mjs directly if you mean it.\n' "${0##*/}" >&2
   exit 3
 fi
 for _a in "$@"; do
   [ "$_a" = "--" ] && break
   if [ "$_a" = "--allow-write" ]; then
-    printf 'solask: --allow-write is not accepted here (this shim is sandbox-excluded). Run write mode explicitly, after the user approves it:\n  node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --allow-write --cwd <repo> "<prompt>"\n' >&2
+    printf '%s: --allow-write is not accepted here (this shim is sandbox-excluded). Run write mode explicitly, after the user approves it:\n  node "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --model %s --allow-write --cwd <repo> "<prompt>"\n' "${0##*/}" "$MODEL" >&2
     exit 3
   fi
+  case "$_a" in
+    --model|--model=*)
+      printf '%s: --model is not accepted here. The model is pinned to "%s" by the command name you used (solask|astraask). Call cdx-sol.mjs directly to choose a different one.\n' "${0##*/}" "$MODEL" >&2
+      exit 3
+      ;;
+  esac
 done
 
 # Resolve node the way agyask resolves agy: PATH is not searched, because a `node`
@@ -52,6 +87,10 @@ NODE_BIN=""
 for _c in /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node "$HOME/.local/bin/node"; do
   [ -x "$_c" ] && { NODE_BIN=$_c; break; }
 done
-[ -n "$NODE_BIN" ] || { printf 'solask: no node found in a trusted location (/opt/homebrew/bin, /usr/local/bin, /usr/bin, ~/.local/bin). PATH is deliberately not searched: this shim runs outside the sandbox.\n' >&2; exit 3; }
+[ -n "$NODE_BIN" ] || { printf '%s: no node found in a trusted location (/opt/homebrew/bin, /usr/local/bin, /usr/bin, ~/.local/bin). PATH is deliberately not searched: this shim runs outside the sandbox.\n' "${0##*/}" >&2; exit 3; }
 
-exec "$NODE_BIN" "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" "$@"
+CDX_SOL_PIN_MODEL="$MODEL"
+CDX_SOL_NO_WRITE=1
+export CDX_SOL_PIN_MODEL CDX_SOL_NO_WRITE
+
+exec "$NODE_BIN" "$HOME/.claude/skills/cdx-sol/cdx-sol.mjs" --model "$MODEL" "$@"
