@@ -86,6 +86,7 @@ run deadline-check         sh      deadline-check.sh
 run rule-attribution       sh      rule-attribution-check.sh
 run a6-selftest            node    a6-selftest.mjs
 run rule-inventory         python3 rule-inventory.py
+run shim-plain-dispatch    sh      shim-plain-dispatch.sh
 
 printf '\n%d passed, %d failed, %d not run.\n' "$pass" "$fail" "$skip"
 [ -n "$skipped" ] && printf 'not run:%s — coverage those tests provide was NOT checked.\n' "$skipped"

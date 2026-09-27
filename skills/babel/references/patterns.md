@@ -17,10 +17,16 @@ Used in Phase 1 (design). Run only when triage classifies the task as M/L. For S
 
 0. **Fix the canonical data channel** (data/replication tasks only, before design): decide the primary sources the deliverable must ground on and the "non-degrading way to read them," and record them in the TaskPacket `canon` field (protocol.md §2). Retrofitting this after design or acceptance leads the implementation worker to fill it via a degraded path (image OCR only, eyeballing a screenshot), creating gaps (a real-task defect root cause). Propagate `canon` into every subsequent implementation/repair TaskPacket. Non-data tasks skip this step.
 1. **Parallel launch**: once user Q&A via superpowers:brainstorming is done, and **before** the lead writes its own proposal, dispatch the identical DesignPacket request (TaskPacket, out_schema=DesignPacket; protocol.md §2) to SOL+agy simultaneously via `run_in_background`.
-2. **Anchoring-avoidance barrier**: the lead writes its own proposal (a DesignPacket) to completion without reading the external responses. Ordering is guaranteed by procedure, not code — place the actions that wait for or check the external output after the lead's proposal is complete. **But "do not read it" is not achievable once a reply is in flight**: a completion notification carries the channel's stdout into the lead's context unbidden, mid-sentence, and an external DesignPacket that has been read cannot be unread. So make the barrier physical — redirect each launch into `.babel/<task>/results/design-<channel>.raw` (`agyask … > …` / `solask … > …`), exactly as Phase 3 lands acceptance results in files, so the notification carries nothing. If a launch template is used unredirected, dispatch the externals *after* the lead's own DesignPacket is written instead; the parallelism is worth less than the independence it would cost.
+2. **Anchoring-avoidance barrier**: the lead writes its own proposal (a DesignPacket) to completion without reading the external responses. Ordering is guaranteed by procedure, not code — place the actions that wait for or check the external output after the lead's proposal is complete. **But "do not read it" is not achievable once a reply is in flight**: a completion notification carries the channel's stdout into the lead's context unbidden, mid-sentence, and an external DesignPacket that has been read cannot be unread. So make the barrier physical — send each launch into `.babel/<task>/results/design-<channel>.raw` (the shims' `--out`/`--err`), exactly as Phase 3 lands acceptance results in files, so the notification carries nothing. If a launch template is used unredirected, dispatch the externals *after* the lead's own DesignPacket is written instead; the parallelism is worth less than the independence it would cost.
 3. **L only**: within Claude, generate independent per-viewpoint designs (MVP-first / risk-first / user-first) as a mixed Sonnet/Opus generation via the Workflow tool's `parallel()` (blueprint uses the same `agent()` API as the acceptance-gate template; schema is DesignPacket).
 4. **Integration**: consolidate all proposals (own + SOL + agy + Claude-internal viewpoints) into an agreement matrix plus points of difference.
 5. **Resolving differences**: the lead first fills cross-system differences with grounding (primary sources / actual code). Dynamic arbitration to the domain-strongest model (algorithmic→SOL / API spec→agy, sending only the differences) is in `advanced.md` §A4. If differences cannot be filled, the lead reconsiders at maximum depth (SKILL.md "think at maximum depth when stuck") → if that still fails, user gate "design differences."
+
+### Plain-command dispatch (read before any launch below)
+
+`agyask`/`solask`/`astraask` only work **outside** the Claude Code sandbox, and they get there only when `sandbox.excludedCommands` matches the call. It matches a **plain command** and nothing else. Measured 2026-09-27: an env prefix (`AGY_PRINT_TIMEOUT=180s agyask …`), a redirect (`> x.raw 2> x.err`), a `"$(cat file)"` argument, a variable (`$T`, `--cwd "$PWD"`), a pipe, or `cd … &&` each stops the match — the call runs sandboxed and dies (agy: `x509: OSStatus -26276`; SOL: `EPERM … state/babel/codex`). That was every babel template until then, which is why the first dispatch of a task used to fail.
+
+So every launch below is its **own** Bash call containing exactly one command, with literal paths and the shim's options in place of shell syntax: `--timeout`/`--in`/`--out`/`--err` (agyask; also `--model`, `--schema`) and `--out`/`--err` (solask). Pre-flight checks (size cap, secret scan) are a **separate, earlier** Bash call. Fill `<repo-abs-path>` with the literal absolute path. A shim that still lands in the sandbox now refuses in one line (`running INSIDE the Claude Code sandbox`, exit 3) — fix the call's shape, do not retry with `dangerouslyDisableSandbox`.
 
 ### SOL launch command template
 
@@ -28,7 +34,10 @@ Write the payload to `.babel/<task>/inbox/design-req.json` and have SOL read it 
 
 ```bash
 grep -rnEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=-]{16,}' .babel/<task>/inbox/design-req.json .babel/<task>/spec.md && { echo 'secret pattern in the design payload — mask before dispatch (protocol.md §0)' >&2; exit 1; }
-solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON." > .babel/<task>/results/design-sol.raw 2> .babel/<task>/results/design-sol.err
+```
+Then dispatch as its **own** Bash call — one plain command, nothing around it (see "Plain-command dispatch" above):
+```bash
+solask --out .babel/<task>/results/design-sol.raw --err .babel/<task>/results/design-sol.err --tier normal --cwd <repo-abs-path> "TaskPacket at .babel/<task>/inbox/design-req.json. Read it and referenced files. Output DesignPacket JSON only: {approach:str, decisions:[str], risks:[str], tradeoffs:[str], rec:str}. Example: {\"approach\":\"JWT rotation via refresh token\",\"decisions\":[\"15min access TTL\"],\"risks\":[\"clock skew\"],\"tradeoffs\":[\"extra round trip\"],\"rec\":\"adopt\"}. No prose outside JSON."
 ```
 
 - `--tier normal` (normal for design, deep for diagnosis/critical acceptance).
@@ -36,7 +45,7 @@ solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/design-re
 
 ### agy launch command template
 
-agy is sent inline payloads only (protocol.md §1) → do not reference a path to spec.md; inline the spec essentials (goal/criteria/constraints) into the prompt. Build the prompt with the Write tool and dispatch it with `agyask "$(cat <file>)"` — never a heredoc (protocol.md §3). Keep the payload to the diff-hunk equivalent only, under the 32 KB cap.
+agy is sent inline payloads only (protocol.md §1) → do not reference a path to spec.md; inline the spec essentials (goal/criteria/constraints) into the prompt. Build the prompt with the Write tool and dispatch it with `agyask --in <file>` — never a heredoc (protocol.md §3). Keep the payload to the diff-hunk equivalent only, under the 32 KB cap.
 
 Write this to `.babel/<task>/inbox/agy-design.txt` with the Write tool (not a heredoc — protocol.md §3):
 
@@ -48,7 +57,10 @@ Output DesignPacket JSON only, no prose. Do not use any tools — answer directl
 ```bash
 [ "$(wc -c < .babel/<task>/inbox/agy-design.txt)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
 grep -nEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|(api[_-]?key|secret|password|token)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=-]{16,}' .babel/<task>/inbox/agy-design.txt && { echo 'secret pattern in the design payload — mask before dispatch (protocol.md §0)' >&2; exit 1; }
-AGY_PRINT_TIMEOUT=180s agyask "$(cat .babel/<task>/inbox/agy-design.txt)" > .babel/<task>/results/design-agy.raw 2> .babel/<task>/results/design-agy.err
+```
+Then dispatch as its **own** Bash call — one plain command, nothing around it (see "Plain-command dispatch" above):
+```bash
+agyask --timeout 180s --in .babel/<task>/inbox/agy-design.txt --out .babel/<task>/results/design-agy.raw --err .babel/<task>/results/design-agy.err
 ```
 
 Bash `timeout: 200000` applies only if run in the foreground; backgrounded, the bound is `AGY_PRINT_TIMEOUT` enforced by the agyask watchdog (protocol.md §8).
@@ -181,7 +193,7 @@ done
 `TOKENS` holds **hashes, not tokens**, and lives outside the repository —
 `TOKENS="${TMPDIR:-/tmp}/babel-<task>-r<N>-tokens.txt"`. Both halves matter and
 neither is sufficient. Outside the repo, because SOL is dispatched with
-`--cwd "<repo>"` and can read anything in it. Hashed, because `solask` also runs
+`--cwd <repo-abs-path>` and can read anything in it. Hashed, because `solask` also runs
 **outside the Claude Code sandbox**, so "outside the repo" is not out of reach — the
 path is derivable from the task slug and round, and a plaintext list anywhere on the
 filesystem is a cheaper way to pass the gate than reading the payload. A hash
@@ -247,7 +259,7 @@ Run correctness / security / edge-cases / spec-compliance through `pipeline()` i
  "criteria":["no C/H"],"constraints":["read-only"],"out_schema":"finding-jsonl"}
 ```
 ```bash
-solask --tier normal --cwd "<repo>" "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. First line of your answer is the receipt: {\"receipt\":{\"tokens\":[\"<the value on the babel-receipt-token-a line, somewhere in the first quarter of the diff>\",\"<the value on the babel-receipt-token-b line, the diff's last line>\"],\"paths\":[\"<files you actually read>\"],\"dimensions\":[\"correctness\",\"security\",\"edge-cases\",\"spec-compliance\"],\"unread\":[\"<dispatched paths you did not read>\"]}}. Then output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) after the receipt line if clean — the receipt is required either way. No prose." > .babel/<task>/results/sol-r<N>.raw 2> .babel/<task>/results/sol-r<N>.err
+solask --out .babel/<task>/results/sol-r<N>.raw --err .babel/<task>/results/sol-r<N>.err --tier normal --cwd <repo-abs-path> "TaskPacket at .babel/<task>/inbox/accept-r<N>.json. Read it and the referenced files. First line of your answer is the receipt: {\"receipt\":{\"tokens\":[\"<the value on the babel-receipt-token-a line, somewhere in the first quarter of the diff>\",\"<the value on the babel-receipt-token-b line, the diff's last line>\"],\"paths\":[\"<files you actually read>\"],\"dimensions\":[\"correctness\",\"security\",\"edge-cases\",\"spec-compliance\"],\"unread\":[\"<dispatched paths you did not read>\"]}}. Then output one JSON array per line: [\"<id>\",\"<sev C|H|M|L>\",\"<file>\",<line>,\"<claim>\",\"<evidence ~10-25 words>\"]. Example: [\"F1\",\"C\",\"auth.py\",42,\"token expiry unchecked\",\"verify_token() decodes JWT without checking exp claim\"]. Output NONE (single word) after the receipt line if clean — the receipt is required either way. No prose."
 ```
 `run_in_background: true` (bound = solask's ~9 min cap, not the Bash `timeout: 600000`; protocol.md §8). For critical acceptance of a security/irreversible L task, swap in `--tier deep` (see the cost discipline in SKILL.md).
 
@@ -273,9 +285,12 @@ then dispatch it:
 
 ```bash
 [ "$(wc -c < .babel/<task>/inbox/agy-r<N>.txt)" -lt 32768 ] || { echo 'over the 32 KB cap — split or drop agy (protocol.md §3)' >&2; exit 1; }
-AGY_PRINT_TIMEOUT=240s agyask "$(cat .babel/<task>/inbox/agy-r<N>.txt)" > .babel/<task>/results/agy-r<N>.raw 2> .babel/<task>/results/agy-r<N>.err
 ```
-`run_in_background: true` with `AGY_PRINT_TIMEOUT=240s` — a whole-changeset review is heavier than a design request, so agy's budget is intentionally extended. **Both streams are redirected in every template above.** stdout is the findings channel and stderr carries the one `BABEL_USAGE` line the scoreboard's `tokens` field is filled from (protocol.md §5); a template that redirects only stdout leaves that field `null` on a shim that is working, which is indistinguishable downstream from no instrumentation at all. That env var is the real bound; the Bash `timeout: 300000` only applies in the foreground (protocol.md §8).
+Then dispatch as its **own** Bash call — one plain command, nothing around it (see "Plain-command dispatch" above):
+```bash
+agyask --timeout 240s --in .babel/<task>/inbox/agy-r<N>.txt --out .babel/<task>/results/agy-r<N>.raw --err .babel/<task>/results/agy-r<N>.err
+```
+`run_in_background: true` with `--timeout 240s` — a whole-changeset review is heavier than a design request, so agy's budget is intentionally extended. **Both streams are redirected in every template above.** stdout is the findings channel and stderr carries the one `BABEL_USAGE` line the scoreboard's `tokens` field is filled from (protocol.md §5); a template that redirects only stdout leaves that field `null` on a shim that is working, which is indistinguishable downstream from no instrumentation at all. That env var is the real bound; the Bash `timeout: 300000` only applies in the foreground (protocol.md §8).
 
 ### Merge procedure
 
