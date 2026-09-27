@@ -27,7 +27,30 @@
 # Runs outside the Claude Code sandbox via sandbox.excludedCommands
 # ("solask" + "solask *" + "astraask" + "astraask *"). Renaming this script, or
 # the symlink, means updating that list. See cdx-sol/SKILL.md and cdx-astra/SKILL.md.
+#
+# Leading --out <file> / --err <file> replace shell redirects. excludedCommands only
+# matches a PLAIN command (measured 2026-09-27: a redirect, env prefix, $VAR or
+# $(...) each stops the match and the call dies inside the sandbox with EPERM), so
+# a babel dispatch must be `solask --out a --err b --tier normal --cwd /abs/repo "…"`.
 set -eu
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --out|--err)
+      [ $# -ge 2 ] || { printf '%s: %s needs a value.\n' "${0##*/}" "$1" >&2; exit 3; }
+      if [ "$1" = --out ]; then exec >"$2"; else exec 2>"$2"; fi
+      shift 2 ;;
+    *) break ;;
+  esac
+done
+
+# Inside the Claude Code sandbox cdx-sol cannot write its state root or nest its
+# own sandbox-exec, so the call is certain to fail. pgrep failing to read the
+# process table is the measured sandbox signature (agyask uses the same test).
+if command -v pgrep >/dev/null 2>&1 && ! pgrep -P $$ >/dev/null 2>&1 && ! pgrep -l -P 1 >/dev/null 2>&1; then
+  printf '%s: running INSIDE the Claude Code sandbox, where this channel cannot work. The call did not match sandbox.excludedCommands: invoke it as one plain command — no env prefix, redirect, pipe, $(...), variable or `cd &&`. Use --out/--err and a literal --cwd path instead.\n' "${0##*/}" >&2
+  exit 3
+fi
 
 case "${0##*/}" in
   solask)   MODEL=gpt-6-sol ;;

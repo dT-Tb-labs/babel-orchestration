@@ -19,7 +19,53 @@
 # means updating that list. See SKILL.md.
 #
 # AGY_PRINT_TIMEOUT is the total budget for the call, in seconds ("180s").
+#
+# Leading options, for callers that must not use shell syntax (see below):
+#   --timeout <dur>   same as AGY_PRINT_TIMEOUT
+#   --in <file>       read the prompt from <file> instead of the arguments
+#   --out <file>      write stdout to <file>
+#   --err <file>      write stderr (BABEL_DEADLINE/BABEL_USAGE included) to <file>
+#   --model <id>      same as AGY_MODEL
+#   --schema <file>   same as AGY_SCHEMA
+# They exist because sandbox.excludedCommands only matches a PLAIN command.
+# Measured on Claude Code 2026-09-27: an env prefix (AGY_PRINT_TIMEOUT=… agyask),
+# a redirect, or a "$(cat …)" argument each stops the match, the call runs inside
+# the sandbox, and agy dies on TLS. `agyask --timeout 180s --in a --out b --err c`
+# is the same call as a plain command.
 set -eu
+
+_in=''
+while [ $# -gt 0 ]; do
+  case $1 in
+    --timeout|--in|--out|--err|--model|--schema)
+      [ $# -ge 2 ] || { printf 'agyask: %s needs a value.\n' "$1" >&2; exit 3; }
+      case $1 in
+        --timeout) AGY_PRINT_TIMEOUT=$2 ;;
+        --in)  _in=$2 ;;
+        --out) exec >"$2" ;;
+        --err) exec 2>"$2" ;;
+        --model)  AGY_MODEL=$2 ;;
+        --schema) AGY_SCHEMA=$2; export AGY_SCHEMA ;;  # the envelope parser reads it from the environment
+      esac
+      shift 2 ;;
+    *) break ;;
+  esac
+done
+if [ -n "$_in" ]; then
+  [ $# -eq 0 ] || { printf 'agyask: --in and a prompt argument are exclusive — which one is the payload?\n' >&2; exit 3; }
+  [ -r "$_in" ] || { printf 'agyask: --in %s is not a readable file.\n' "$_in" >&2; exit 3; }
+  set -- "$(cat "$_in")"
+fi
+
+# Inside the Claude Code sandbox agy cannot verify TLS and the call is certain to
+# fail — after ~20 KB of Go log that then lands in the caller's context. pgrep
+# failing to read the process table is the measured sandbox signature (see the
+# kill_tree notes below). Fail in one line instead, naming the fix. A host with no
+# pgrep at all is not a sandbox; the degraded-cleanup warning below covers it.
+if command -v pgrep >/dev/null 2>&1 && ! pgrep -P $$ >/dev/null 2>&1 && ! pgrep -l -P 1 >/dev/null 2>&1; then
+  printf 'agyask: running INSIDE the Claude Code sandbox, where agy cannot reach its API. The call did not match sandbox.excludedCommands: invoke agyask as one plain command — no env prefix, redirect, pipe, $(...), variable or `cd &&`. Use --timeout/--in/--out/--err instead.\n' >&2
+  exit 3
+fi
 
 BUDGET="${AGY_PRINT_TIMEOUT:-180s}"
 # Stripping non-digits alone read "3m" as 3 seconds — a Go-style duration the agy

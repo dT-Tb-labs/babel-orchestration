@@ -16,8 +16,10 @@ Same shape as a cross-review workflow, launched through the `agyask` shim (PTY w
 **Workaround A (POSIX, preferred):** redirecting stdin from `/dev/null` makes stdout flush normally without a PTY; #76 drops output only while stdin stays an open pipe. This is what [`agyask`](agyask) does — `install.sh` copies it to `~/.local/bin`, and it is the only invocation this skill and babel use:
 
 ```bash
-AGY_PRINT_TIMEOUT=180s agyask "<prompt>"
+agyask --timeout 180s --in <prompt-file>
 ```
+
+**One plain command, nothing around it.** `sandbox.excludedCommands` (below) matches only a plain command: an env prefix (`AGY_PRINT_TIMEOUT=… agyask`), a redirect, a pipe, `"$(cat …)"`, a `$VAR`, or `cd … &&` each stops the match (measured 2026-09-27), the call runs sandboxed, and agy dies on TLS. Use the options instead — `--timeout`, `--in <file>` (prompt from a file written with the Write tool), `--out <file>`, `--err <file>`, `--model <id>`, `--schema <file>` — all before any prompt argument. Launched inside the sandbox anyway, agyask refuses in one line (`running INSIDE the Claude Code sandbox`, exit 3) instead of dumping agy's log.
 
 `AGY_SCHEMA=<json-schema file>` makes agy enforce that schema (`--json-schema`, agy ≥ 1.1.23) and agyask then prints the envelope's `structured_output` as one line of clean JSON instead of the answer text — under a schema the text comes back as a fenced blob plus a raw copy, measured, so the text is deliberately not printed. Use it for finding-jsonl and DesignPacket dispatches; the schema file must be readable and its path free of whitespace. Not available without the agy venv.
 
@@ -33,7 +35,7 @@ AGY_PRINT_TIMEOUT=180s agyask "<prompt>"
 "sandbox": { "excludedCommands": ["agyask", "agyask *"] }
 ```
 
-**Why both entries.** Measured on Claude Code 2.1.220, either form alone is enough: with only `"agyask"`, calls carrying a prompt and calls with an `AGY_PRINT_TIMEOUT=…` prefix both ran outside the sandbox, and with only `"agyask *"` the argument-less call did too. Both are listed because the official troubleshooting guidance uses the wildcard form (`docker *`) while the settings reference shows bare names, the matching rule is documented nowhere, and several open reports describe `excludedCommands` not taking effect — so the pair costs nothing and does not depend on which reading is right. Renaming the script means updating this list.
+**Why both entries.** Measured on Claude Code 2.1.220, either form alone is enough: with only `"agyask"`, calls carrying a prompt ran outside the sandbox (an `AGY_PRINT_TIMEOUT=…` prefix did too on 2.1.220, but **no longer does** as of 2026-09-27 — see "One plain command" above), and with only `"agyask *"` the argument-less call did too. Both are listed because the official troubleshooting guidance uses the wildcard form (`docker *`) while the settings reference shows bare names, the matching rule is documented nowhere, and several open reports describe `excludedCommands` not taking effect — so the pair costs nothing and does not depend on which reading is right. Renaming the script means updating this list.
 
 An earlier version of this file claimed the bare name matches only argument-less calls. That does not reproduce on 2.1.220; the claim came from a confounded observation and has been withdrawn.
 
@@ -121,11 +123,16 @@ The wrapper imports only the current OS backend: Windows=`pywinpty`; Linux/macOS
 
 ## Step 2: Launch agy
 
-Pass the prompt as an argument. Scan it for secrets first (credentials, tokens, API keys, passwords) — this leaves the machine — and mask or drop any hit, telling the user what was withheld. Then:
+Write the prompt to a file with the Write tool (e.g. `<scratchpad>/agy-review.txt`). Scan it for secrets first (credentials, tokens, API keys, passwords) — this leaves the machine — and mask or drop any hit, telling the user what was withheld. Then, as one plain command with the literal path:
 
 ```bash
-AGY_PRINT_TIMEOUT=180s agyask \
-  "You are an expert code reviewer providing a second opinion on code written by Claude AI. Your goal is to find issues that Claude might have missed and suggest alternative approaches from a fresh perspective.
+agyask --timeout 180s --in <scratchpad>/agy-review.txt
+```
+
+Prompt file content:
+
+```
+You are an expert code reviewer providing a second opinion on code written by Claude AI. Your goal is to find issues that Claude might have missed and suggest alternative approaches from a fresh perspective.
 
 Review the following code:
 
@@ -143,22 +150,14 @@ Please evaluate:
 3. Code quality (readability, maintainability, naming, complexity)
 4. Alternative approaches Claude might not have considered
 
-Be concise and direct. Flag only meaningful issues, not minor style nitpicks. If the code looks good, say so."
+Be concise and direct. Flag only meaningful issues, not minor style nitpicks. If the code looks good, say so.
 ```
 
 Also set `timeout: 200000` (200s) on the Bash tool — above the 180s budget so agyask, not Bash, is what times out. **This only matters in the foreground**: a `run_in_background: true` call ignores the Bash `timeout` entirely (measured), so `AGY_PRINT_TIMEOUT` is the sole bound there. agyask enforces it with its own watchdog — agy's `--print-timeout` does not engage when agy wedges before starting its timer.
 
-**Prompt argument escaping:** For prompts with many double quotes, pass via a heredoc → environment variable:
+**Prompt escaping:** not an issue — the prompt lives in a file and never passes through shell quoting. Do not fall back to a heredoc or `PROMPT=$(cat …)`: both break the sandbox exclusion as well as quoting.
 
-```bash
-PROMPT=$(cat <<'EOF'
-You are an expert code reviewer...
-EOF
-)
-AGY_PRINT_TIMEOUT=180s agyask "$PROMPT"
-```
-
-**Model selection:** `agyask` pins `--model "${AGY_MODEL:-gemini-3.7-flash-high}"` (the PTY fallback defaults to the same). Override per call with `AGY_MODEL=<id> agyask "$PROMPT"`; `agy models` lists the valid ids. There is no character-count-based model switching.
+**Model selection:** `agyask` pins `--model "${AGY_MODEL:-gemini-3.7-flash-high}"` (the PTY fallback defaults to the same). Override per call with `agyask --model <id> --in <file>`; `agy models` lists the valid ids. There is no character-count-based model switching.
 
 ## Step 3: Organize and Display the Results
 
