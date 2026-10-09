@@ -35,9 +35,9 @@ tells you (degradation table in `skills/babel/SKILL.md`).
 
 | Skill | Role | Backend |
 |---|---|---|
-| `babel` | Lead orchestrator: triage → phase routing → merge → gates | Claude Code (Fable 5 or Opus) |
+| `babel` | Lead orchestrator: triage → phase routing → merge → gates | Claude Code (Fable 5.1 or Opus 5.5) |
 | `cdx-sol` | Independent design / diagnosis / review channel | GPT-6-SOL via OpenAI Codex CLI (ChatGPT subscription) |
-| `agy` | Third-opinion cross-review channel | Google Antigravity CLI (`agy`, Gemini 3) |
+| `agy` | Third-opinion cross-review channel | Google Antigravity CLI (`agy`, Gemini 3.7 Flash by default) |
 
 These two need `sh install.sh`, not the plugin install — their `solask` and
 `agyask` shims have to land on `PATH` and be named in `sandbox.excludedCommands`,
@@ -289,4 +289,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-<sub>**Keywords:** Claude Code skill · multi-model / multi-agent AI orchestration · LLM ensemble · agentic dev workflow · automated code review & second opinion · design debate · build-debug loop · acceptance gate · Claude (Opus / Sonnet / Fable) + GPT-6-SOL (OpenAI Codex) + Gemini 3 (Google Antigravity `agy`) · superpowers pipeline · multi-model ensemble pattern.</sub>
+<sub>**Keywords:** Claude Code skill · multi-model / multi-agent AI orchestration · LLM ensemble · agentic dev workflow · automated code review & second opinion · design debate · build-debug loop · acceptance gate · Claude (Fable 5.1 / Opus 5.5 / Sonnet 5.5) + GPT-6-SOL (OpenAI Codex) + Gemini 3 (Google Antigravity `agy`) · superpowers pipeline · multi-model ensemble pattern.</sub>
