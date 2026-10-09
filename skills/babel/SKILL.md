@@ -1,6 +1,6 @@
 ---
 name: babel
-description: Use when the user invokes /babel, or asks to orchestrate multiple models for a dev task ("多モデルで開発", "develop with multiple models", "5モデルで", "with 5 models", "複数AIでレビューさせて", "have multiple AIs review it"), or asks for a measured improvement loop ("ループエンジニアリング", "loop engineering", "スコアを上げるまで回して", "iterate until the benchmark improves", "optimize against a metric"). Orchestrates 5 models (Fable5/Opus/Sonnet/GPT-6-SOL/agy) across the superpowers pipeline (brainstorm→plan→implement→review), injecting multi-model debate/build-debug/acceptance-gate into each phase to exceed single-frontier-model quality (multi-model ensemble pattern). Routes measurable search tasks into a multi-model optimization loop against an automated oracle, and proposes a Workflow fan-out when the task is many independent sites. Not for JavaScript Babel transpiler tasks.
+description: Use when the user invokes /babel, or asks to orchestrate multiple models for a dev task ("多モデルで開発", "develop with multiple models", "5モデルで", "with 5 models", "複数AIでレビューさせて", "have multiple AIs review it"), or asks for a measured improvement loop ("ループエンジニアリング", "loop engineering", "スコアを上げるまで回して", "iterate until the benchmark improves", "optimize against a metric"). Orchestrates 5 models (Fable 5.1/Opus/Sonnet/GPT-6-SOL/agy) across the superpowers pipeline (brainstorm→plan→implement→review), injecting multi-model debate/build-debug/acceptance-gate into each phase to exceed single-frontier-model quality (multi-model ensemble pattern). Routes measurable search tasks into a multi-model optimization loop against an automated oracle, and proposes a Workflow fan-out when the task is many independent sites. Not for JavaScript Babel transpiler tasks.
 ---
 
 # babel — 5-model orchestration
@@ -13,7 +13,7 @@ babel extends superpowers:brainstorming / superpowers:writing-plans / superpower
 
 | Model | Role | Invocation |
 |---|---|---|
-| Fable5 or Opus | Lead: orchestration, integration, final judgment | The session itself, chosen by the Phase 0 default rule rather than a question (if the user wants Opus, direct them to the `/model` switch — the skill cannot switch its own model) |
+| Fable 5.1 or Opus | Lead: orchestration, integration, final judgment | The session itself, chosen by the Phase 0 default rule rather than a question (if the user wants Opus, direct them to the `/model` switch — the skill cannot switch its own model) |
 | Opus (when not lead) | Hardest verification/judgment | Agent tool model override |
 | Sonnet | Mechanical implementation, parallel exploration, first-pass screening | Agent tool / Workflow |
 | GPT-6-SOL | Independent design proposal, Build&Debug partner, when-stuck diagnosis, acceptance review | `solask` (`~/.local/bin/solask`: sets a writable state root and, via `sandbox.excludedCommands`, runs outside the sandbox — cdx-sol's own `sandbox-exec` cannot nest inside Claude's. See the cdx-sol SKILL.md.) (tier: checkpoint=quick / design and M/L acceptance=normal / diagnosis and critical acceptance=deep. S acceptance does not use SOL at all — see Phase 0) |
