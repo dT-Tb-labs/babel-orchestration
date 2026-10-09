@@ -89,7 +89,7 @@ an improvement loop instead of a linear implementation phase:
   correct it — the metric and its direction, the target value, the exact oracle
   command, and the invariants that must hold regardless of the metric. A loop with an
   underspecified goal does not fail; it succeeds at the wrong thing for its whole budget.
-- **Three models generate, the oracle selects.** Claude, GPT-6-SOL and Gemini 3 each
+- **Three models generate, the oracle selects.** Claude, GPT-6-SOL and Gemini 3.7 each
   propose one candidate per iteration, blind to each other, isolated in their own
   worktrees. Nobody votes — the measurement decides, which is why a loop can afford
   three generators where an acceptance round can barely afford three reviewers.
@@ -289,4 +289,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-<sub>**Keywords:** Claude Code skill · multi-model / multi-agent AI orchestration · LLM ensemble · agentic dev workflow · automated code review & second opinion · design debate · build-debug loop · acceptance gate · Claude (Fable 5.1 / Opus 5.5 / Sonnet 5.5) + GPT-6-SOL (OpenAI Codex) + Gemini 3 (Google Antigravity `agy`) · superpowers pipeline · multi-model ensemble pattern.</sub>
+<sub>**Keywords:** Claude Code skill · multi-model / multi-agent AI orchestration · LLM ensemble · agentic dev workflow · automated code review & second opinion · design debate · build-debug loop · acceptance gate · Claude (Fable 5.1 / Opus 5.5 / Sonnet 5.5) + GPT-6-SOL (OpenAI Codex) + Gemini 3.7 (Google Antigravity `agy`) · superpowers pipeline · multi-model ensemble pattern.</sub>
